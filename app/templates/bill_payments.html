@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="utf-8">
+  <meta content="width=device-width, initial-scale=1.0" name="viewport">
+  <title>Payment History - RentEase</title>
+  <meta name="description" content="">
+  <meta name="keywords" content="">
+
+  <!-- Favicons -->
+  <link href="{{ url_for('static', filename='assets/img/favicon.png') }}" rel="icon">
+  <link href="{{ url_for('static', filename='assets/img/apple-touch-icon.png') }}" rel="apple-touch-icon">
+
+  <!-- Fonts -->
+  <link href="https://fonts.googleapis.com" rel="preconnect">
+  <link href="https://fonts.gstatic.com" rel="preconnect" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Roboto:ital,wght@0,100;0,300;0,400;0,500;0,700;0,900;1,100;1,300;1,400;1,500;1,700;1,900&family=Poppins:ital,wght@0,100;0,200;0,300;0,400;0,500;0,600;0,700;0,800;0,900;1,100;1,200;1,300;1,400;1,500;1,600;1,700;1,800;1,900&family=Raleway:ital,wght@0,100;0,200;0,300;0,400;0,500;0,600;0,700;0,800;0,900;1,100;1,200;1,300;1,400;1,500;1,600;1,700;1,800;1,900&display=swap" rel="stylesheet">
+
+  <!-- Vendor CSS Files -->
+  <link href="{{ url_for('static', filename='assets/vendor/bootstrap/css/bootstrap.min.css') }}" rel="stylesheet">
+  <link href="{{ url_for('static', filename='assets/vendor/bootstrap-icons/bootstrap-icons.css') }}" rel="stylesheet">
+  <link href="{{ url_for('static', filename='assets/vendor/aos/aos.css') }}" rel="stylesheet">
+
+  <!-- Main CSS File -->
+  <link href="{{ url_for('static', filename='assets/css/main.css') }}" rel="stylesheet">
+</head>
+
+<body class="index-page">
+  <header id="header" class="header d-flex align-items-center fixed-top">
+    <div class="container position-relative d-flex align-items-center justify-content-between">
+      <a href="{{ url_for('index') }}" class="logo d-flex align-items-center me-auto me-xl-0">
+        <h1 class="sitename">RentEase</h1><span>.</span>
+      </a>
+
+      <nav id="navmenu" class="navmenu">
+        <ul>
+          <li><a href="{{ url_for('index') }}#hero">Home</a></li>
+          <li><a href="{{ url_for('index') }}#properties">Properties</a></li>
+          <li><a href="{{ url_for('list_tenants') }}">Tenants</a></li>
+          <li><a href="{{ url_for('all_bills') }}" class="active">Bills</a></li>
+          <li><a href="{{ url_for('index') }}#inventory">Inventory</a></li>
+          <li class="dropdown">
+            <a href="#"><span>Reports</span> <i class="bi bi-chevron-down toggle-dropdown"></i></a>
+            <ul>
+              <li><a href="{{ url_for('index') }}#rent-reports">Rent Collection</a></li>
+              <li><a href="{{ url_for('index') }}#maintenance-reports">Maintenance</a></li>
+              <li><a href="{{ url_for('index') }}#inventory-reports">Inventory Status</a></li>
+            </ul>
+          </li>
+          <li><a href="{{ url_for('index') }}#contact">Contact</a></li>
+        </ul>
+        <i class="mobile-nav-toggle d-xl-none bi bi-list"></i>
+      </nav>
+
+      {% if session.get('user_id') %}
+        <a class="btn-getstarted" href="{{ url_for('logout') }}">Logout</a>
+      {% else %}
+        <a class="btn-getstarted me-1" href="{{ url_for('login') }}">Login</a>
+        <a class="btn-getstarted" href="{{ url_for('register') }}">Register</a>
+      {% endif %}
+    </div>
+  </header>
+
+  <main class="main" style="margin-top: 100px;">
+    <div class="container mt-5">
+      <div class="d-flex justify-content-between align-items-center mb-4">
+        <div>
+          <h2>Payment History</h2>
+          <p class="text-muted">Payment records for {{ tenant.name }}</p>
+        </div>
+        <a href="{{ url_for('all_bills') }}" class="btn btn-outline-primary">
+          <i class="bi bi-arrow-left"></i> Back to Bills
+        </a>
+      </div>
+
+      <div class="card">
+        <div class="card-body">
+          <div class="table-responsive">
+            <table class="table table-hover">
+              <thead>
+                <tr>
+                  <th>Date</th>
+                  <th>Amount</th>
+                  <th>Payment Mode</th>
+                  <th>Notes</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for payment in payments %}
+                <tr>
+                  <td>{{ payment.payment_date }}</td>
+                  <td class="text-success fw-bold">₹{{ "%.2f"|format(payment.amount) }}</td>
+                  <td>{{ payment.payment_mode|replace('_', ' ')|title }}</td>
+                  <td>{{ payment.notes or '-' }}</td>
+                  <td>
+                  </td>
+                </tr>
+                {% endfor %}
+              </tbody>
+              <tfoot>
+                <tr class="table-light">
+                  <td colspan="1" class="fw-bold">Total Paid</td>
+                  <td colspan="4" class="text-success fw-bold">
+                    ₹{{ "%.2f"|format(payments|sum(attribute='amount')) }}
+                  </td>
+                </tr>
+              </tfoot>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <!-- Vendor JS Files -->
+  <script src="{{ url_for('static', filename='assets/vendor/bootstrap/js/bootstrap.bundle.min.js') }}"></script>
+  <script src="{{ url_for('static', filename='assets/vendor/aos/aos.js') }}"></script>
+  <script src="{{ url_for('static', filename='assets/js/main.js') }}"></script>
+
+  <script>
+    function printReceipt(paymentId) {
+      // TODO: Implement receipt printing
+      alert('Receipt printing functionality will be implemented');
+    }
+  </script>
+</body>
+</html> 

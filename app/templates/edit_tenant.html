@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="utf-8">
+  <meta content="width=device-width, initial-scale=1.0" name="viewport">
+  <title>Edit Tenant - RentEase</title>
+  <meta name="description" content="">
+  <meta name="keywords" content="">
+
+  <!-- Favicons -->
+  <link href="{{ url_for('static', filename='assets/img/favicon.png') }}" rel="icon">
+  <link href="{{ url_for('static', filename='assets/img/apple-touch-icon.png') }}" rel="apple-touch-icon">
+
+  <!-- Fonts -->
+  <link href="https://fonts.googleapis.com" rel="preconnect">
+  <link href="https://fonts.gstatic.com" rel="preconnect" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Roboto:ital,wght@0,100;0,300;0,400;0,500;0,700;0,900;1,100;1,300;1,400;1,500;1,700;1,900&family=Poppins:ital,wght@0,100;0,200;0,300;0,400;0,500;0,600;0,700;0,800;0,900;1,100;1,200;1,300;1,400;1,500;1,600;1,700;1,800;1,900&family=Raleway:ital,wght@0,100;0,200;0,300;0,400;0,500;0,600;0,700;0,800;0,900;1,100;1,200;1,300;1,400;1,500;1,600;1,700;1,800;1,900&display=swap" rel="stylesheet">
+
+  <!-- Vendor CSS Files -->
+  <link href="{{ url_for('static', filename='assets/vendor/bootstrap/css/bootstrap.min.css') }}" rel="stylesheet">
+  <link href="{{ url_for('static', filename='assets/vendor/bootstrap-icons/bootstrap-icons.css') }}" rel="stylesheet">
+  <link href="{{ url_for('static', filename='assets/vendor/aos/aos.css') }}" rel="stylesheet">
+
+  <!-- Main CSS File -->
+  <link href="{{ url_for('static', filename='assets/css/main.css') }}" rel="stylesheet">
+</head>
+
+<body class="index-page">
+  <header id="header" class="header d-flex align-items-center fixed-top">
+    <div class="container position-relative d-flex align-items-center justify-content-between">
+      <a href="{{ url_for('index') }}" class="logo d-flex align-items-center me-auto me-xl-0">
+        <h1 class="sitename">RentEase</h1><span>.</span>
+      </a>
+
+      <nav id="navmenu" class="navmenu">
+        <ul>
+          <li><a href="{{ url_for('index') }}#hero">Home</a></li>
+          <li><a href="{{ url_for('index') }}#properties">Properties</a></li>
+          <li><a href="{{ url_for('list_tenants') }}" class="active">Tenants</a></li>
+          <li><a href="{{ url_for('index') }}#bills">Bills</a></li>
+          <li><a href="{{ url_for('index') }}#inventory">Inventory</a></li>
+          <li class="dropdown">
+            <a href="#"><span>Reports</span> <i class="bi bi-chevron-down toggle-dropdown"></i></a>
+            <ul>
+              <li><a href="{{ url_for('index') }}#rent-reports">Rent Collection</a></li>
+              <li><a href="{{ url_for('index') }}#maintenance-reports">Maintenance</a></li>
+              <li><a href="{{ url_for('index') }}#inventory-reports">Inventory Status</a></li>
+            </ul>
+          </li>
+          <li><a href="{{ url_for('index') }}#contact">Contact</a></li>
+        </ul>
+        <i class="mobile-nav-toggle d-xl-none bi bi-list"></i>
+      </nav>
+
+      {% if session.get('user_id') %}
+        <a class="btn-getstarted" href="{{ url_for('logout') }}">Logout</a>
+      {% else %}
+        <a class="btn-getstarted me-1" href="{{ url_for('login') }}">Login</a>
+        <a class="btn-getstarted" href="{{ url_for('register') }}">Register</a>
+      {% endif %}
+    </div>
+  </header>
+
+  <main class="main" style="margin-top: 100px;">
+    <div class="container mt-5">
+      <div class="d-flex justify-content-between align-items-center mb-4">
+        <h2>Edit Tenant</h2>
+        <a href="{{ url_for('list_tenants') }}" class="btn btn-secondary">
+          <i class="bi bi-arrow-left"></i> Back to Tenants
+        </a>
+      </div>
+
+      <div class="card">
+        <div class="card-body">
+          <form method="POST" enctype="multipart/form-data">
+            <div class="row">
+              <div class="col-md-6">
+                <div class="mb-3">
+                  <label for="property" class="form-label">Property</label>
+                  <input type="text" class="form-control" value="{{ tenant.property_name }}" readonly>
+                </div>
+              </div>
+              <div class="col-md-6">
+                <div class="mb-3">
+                  <label for="room" class="form-label">Room</label>
+                  <input type="text" class="form-control" value="Room {{ tenant.room_number }}" readonly>
+                </div>
+              </div>
+            </div>
+
+            <div class="row">
+              <div class="col-md-6">
+                <div class="mb-3">
+                  <label for="tenant_name" class="form-label">Tenant Name</label>
+                  <input type="text" class="form-control" id="tenant_name" name="tenant_name" value="{{ tenant.name }}" required>
+                </div>
+              </div>
+              <div class="col-md-6">
+                <div class="mb-3">
+                  <label for="phone_number" class="form-label">Phone Number</label>
+                  <input type="tel" class="form-control" id="phone_number" name="phone_number" value="{{ tenant.phone_number }}" required pattern="[0-9]{10}">
+                  <div class="form-text">Enter 10-digit phone number</div>
+                </div>
+              </div>
+            </div>
+
+            <div class="row">
+              <div class="col-md-6">
+                <div class="mb-3">
+                  <label for="move_in_date" class="form-label">Move-in Date</label>
+                  <input type="date" class="form-control" id="move_in_date" name="move_in_date" value="{{ tenant.move_in_date }}" required>
+                </div>
+              </div>
+              <div class="col-md-6">
+                <div class="mb-3">
+                  <label for="police_verification" class="form-label">Police Verification</label>
+                  {% if tenant.police_verification %}
+                  <div class="mb-2">
+                    <a href="{{ url_for('static', filename='uploads/' + tenant.police_verification) }}" target="_blank" class="btn btn-sm btn-outline-primary">
+                      <i class="bi bi-file-earmark-text"></i> View Current
+                    </a>
+                  </div>
+                  {% endif %}
+                  <input type="file" class="form-control form-control-sm" id="police_verification" name="police_verification">
+                  <small class="text-muted">Leave empty to keep current document</small>
+                </div>
+              </div>
+            </div>
+
+            <div class="text-end">
+              <button type="submit" class="btn btn-primary">
+                <i class="bi bi-save"></i> Save Changes
+              </button>
+              <a href="{{ url_for('list_tenants') }}" class="btn btn-secondary">
+                Cancel
+              </a>
+            </div>
+          </form>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <!-- Vendor JS Files -->
+  <script src="{{ url_for('static', filename='assets/vendor/bootstrap/js/bootstrap.bundle.min.js') }}"></script>
+  <script src="{{ url_for('static', filename='assets/vendor/aos/aos.js') }}"></script>
+  <script src="{{ url_for('static', filename='assets/js/main.js') }}"></script>
+</body>
+</html> 

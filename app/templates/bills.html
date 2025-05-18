@@ -1,0 +1,112 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="container py-5">
+    <div class="row mb-4">
+        <div class="col-md-8">
+            <h2 class="mb-3">Bills Overview</h2>
+            <p class="text-muted">Manage and track rent payments for {{ current_month }}</p>
+        </div>
+        <div class="col-md-4 text-md-end">
+            <div class="card bg-primary text-white">
+                <div class="card-body">
+                    <h5 class="card-title">Total Pending</h5>
+                    <h3 class="mb-0">₹{{ "%.2f"|format(total_pending) }}</h3>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="card shadow-sm">
+        <div class="card-body">
+            <div class="table-responsive">
+                <table class="table table-hover">
+                    <thead>
+                        <tr>
+                            <th>Tenant</th>
+                            <th>Property</th>
+                            <th>Room</th>
+                            <th>Rent</th>
+                            <th>Electricity</th>
+                            <th>Water</th>
+                            <th>Total</th>
+                            <th>Due Date</th>
+                            <th>Status</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for tenant in tenants %}
+                        <tr>
+                            <td>
+                                <div class="d-flex align-items-center">
+                                    <div class="avatar-circle me-2">
+                                        {{ tenant.name[0] }}
+                                    </div>
+                                    <div>
+                                        <div class="fw-bold">{{ tenant.name }}</div>
+                                        <small class="text-muted">{{ tenant.phone_number }}</small>
+                                    </div>
+                                </div>
+                            </td>
+                            <td>{{ tenant.property_name }}</td>
+                            <td>{{ tenant.room_type }} - {{ tenant.room_number }}</td>
+                            <td>₹{{ "%.2f"|format(tenant.rent) }}</td>
+                            <td>₹{{ "%.2f"|format(tenant.electricity_charge) }}</td>
+                            <td>₹{{ "%.2f"|format(tenant.water_charge) }}</td>
+                            <td class="fw-bold">₹{{ "%.2f"|format(tenant.total_amount) }}</td>
+                            <td>{{ tenant.due_date }}</td>
+                            <td>
+                                {% if tenant.is_pending %}
+                                <span class="badge bg-danger">Pending</span>
+                                {% else %}
+                                <span class="badge bg-success">Paid</span>
+                                {% endif %}
+                            </td>
+                            <td>
+                                <div class="btn-group">
+                                    <button type="button" class="btn btn-sm btn-outline-primary" 
+                                            onclick="markAsPaid({{ tenant.id }})">
+                                        <i class="bi bi-check-circle"></i> Mark Paid
+                                    </button>
+                                    <button type="button" class="btn btn-sm btn-outline-secondary" 
+                                            onclick="sendReminder({{ tenant.id }})">
+                                        <i class="bi bi-bell"></i> Remind
+                                    </button>
+                                </div>
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
+
+<style>
+.avatar-circle {
+    width: 40px;
+    height: 40px;
+    background-color: #e9ecef;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: bold;
+    color: #495057;
+}
+</style>
+
+<script>
+function markAsPaid(tenantId) {
+    // TODO: Implement mark as paid functionality
+    alert('Mark as paid functionality will be implemented');
+}
+
+function sendReminder(tenantId) {
+    // TODO: Implement send reminder functionality
+    alert('Send reminder functionality will be implemented');
+}
+</script>
+{% endblock %} 

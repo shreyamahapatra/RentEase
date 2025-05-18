@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="utf-8">
+  <meta content="width=device-width, initial-scale=1.0" name="viewport">
+  <title>Add Property - RentEase</title>
+  <meta name="description" content="">
+  <meta name="keywords" content="">
+
+  <!-- Favicons -->
+  <link href="{{ url_for('static', filename='assets/img/favicon.png') }}" rel="icon">
+  <link href="{{ url_for('static', filename='assets/img/apple-touch-icon.png') }}" rel="apple-touch-icon">
+
+  <!-- Fonts -->
+  <link href="https://fonts.googleapis.com" rel="preconnect">
+  <link href="https://fonts.gstatic.com" rel="preconnect" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Roboto:ital,wght@0,100;0,300;0,400;0,500;0,700;0,900;1,100;1,300;1,400;1,500;1,700;1,900&family=Poppins:ital,wght@0,100;0,200;0,300;0,400;0,500;0,600;0,700;0,800;0,900;1,100;1,200;1,300;1,400;1,500;1,600;1,700;1,800;1,900&family=Raleway:ital,wght@0,100;0,200;0,300;0,400;0,500;0,600;0,700;0,800;0,900;1,100;1,200;1,300;1,400;1,500;1,600;1,700;1,800;1,900&display=swap" rel="stylesheet">
+
+  <!-- Vendor CSS Files -->
+  <link href="{{ url_for('static', filename='assets/vendor/bootstrap/css/bootstrap.min.css') }}" rel="stylesheet">
+  <link href="{{ url_for('static', filename='assets/vendor/bootstrap-icons/bootstrap-icons.css') }}" rel="stylesheet">
+  <link href="{{ url_for('static', filename='assets/vendor/aos/aos.css') }}" rel="stylesheet">
+  <link href="{{ url_for('static', filename='assets/vendor/glightbox/css/glightbox.min.css') }}" rel="stylesheet">
+  <link href="{{ url_for('static', filename='assets/vendor/swiper/swiper-bundle.min.css') }}" rel="stylesheet">
+
+  <!-- Main CSS File -->
+  <link href="{{ url_for('static', filename='assets/css/main.css') }}" rel="stylesheet">
+</head>
+
+<body class="index-page">
+
+  <header id="header" class="header d-flex align-items-center fixed-top">
+    <div class="container position-relative d-flex align-items-center justify-content-between">
+
+      <a href="{{ url_for('index') }}" class="logo d-flex align-items-center me-auto me-xl-0">
+        <h1 class="sitename">RentEase</h1><span>.</span>
+      </a>
+
+      <nav id="navmenu" class="navmenu">
+        <ul>
+          <li><a href="{{ url_for('index') }}#hero">Home</a></li>
+          <li><a href="{{ url_for('index') }}#properties">Properties</a></li>
+          <li><a href="{{ url_for('index') }}#tenants">Tenants</a></li>
+          <li><a href="{{ url_for('index') }}#bills">Bills</a></li>
+          <li><a href="{{ url_for('index') }}#inventory">Inventory</a></li>
+          <li class="dropdown">
+            <a href="#"><span>Reports</span> <i class="bi bi-chevron-down toggle-dropdown"></i></a>
+            <ul>
+              <li><a href="{{ url_for('index') }}#rent-reports">Rent Collection</a></li>
+              <li><a href="{{ url_for('index') }}#maintenance-reports">Maintenance</a></li>
+              <li><a href="{{ url_for('index') }}#inventory-reports">Inventory Status</a></li>
+            </ul>
+          </li>
+          <li><a href="{{ url_for('index') }}#contact">Contact</a></li>
+        </ul>
+        <i class="mobile-nav-toggle d-xl-none bi bi-list"></i>
+      </nav>
+
+      <a class="btn-getstarted" href="#login">Login</a>
+    </div>
+  </header>
+
+  <main class="main" style="margin-top: 100px;">
+    <div class="container mt-5">
+      <h2>Add New Property</h2>
+      <form method="POST">
+        <div class="mb-3">
+          <label for="name" class="form-label">Property Name</label>
+          <input type="text" class="form-control" id="name" name="name" required>
+        </div>
+        <div class="mb-3">
+          <label for="address" class="form-label">Address</label>
+          <input type="text" class="form-control" id="address" name="address" required>
+        </div>
+        
+        <!-- Room Configuration Section -->
+        <div class="card mb-4">
+          <div class="card-header">
+            <h5 class="mb-0">Room Configuration</h5>
+          </div>
+          <div class="card-body">
+            <!-- 1 Room Set -->
+            <div class="mb-4">
+              <h6>1 Room Set</h6>
+              <div class="row">
+                <div class="col-md-4">
+                  <div class="mb-3">
+                    <label for="one_room_count" class="form-label">Number of 1 Room Sets</label>
+                    <input type="number" class="form-control" id="one_room_count" name="one_room_count" min="0" value="0">
+                  </div>
+                </div>
+                <div class="col-md-4">
+                  <div class="mb-3">
+                    <label for="one_room_rent" class="form-label">Rent per 1 Room Set</label>
+                    <div class="input-group">
+                      <span class="input-group-text">$</span>
+                      <input type="number" class="form-control" id="one_room_rent" name="one_room_rent" min="0" value="0">
+                    </div>
+                  </div>
+                </div>
+                <div class="col-md-4">
+                  <div class="mb-3">
+                    <label for="one_room_electricity" class="form-label">Electricity Charge</label>
+                    <div class="input-group">
+                      <span class="input-group-text">$</span>
+                      <input type="number" class="form-control" id="one_room_electricity" name="one_room_electricity" min="0" value="0">
+                    </div>
+                  </div>
+                </div>
+                <div class="col-md-4">
+                  <div class="mb-3">
+                    <label for="one_room_water" class="form-label">Water Charge</label>
+                    <div class="input-group">
+                      <span class="input-group-text">$</span>
+                      <input type="number" class="form-control" id="one_room_water" name="one_room_water" min="0" value="0">
+                    </div>
+                  </div>
+                </div>
+                <div class="col-md-4">
+                  <div class="mb-3">
+                    <label for="one_room_security" class="form-label">Security Deposit</label>
+                    <div class="input-group">
+                      <span class="input-group-text">$</span>
+                      <input type="number" class="form-control" id="one_room_security" name="one_room_security" min="0" value="0">
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- 2 Room Set -->
+            <div class="mb-4">
+              <h6>2 Room Set</h6>
+              <div class="row">
+                <div class="col-md-4">
+                  <div class="mb-3">
+                    <label for="two_room_count" class="form-label">Number of 2 Room Sets</label>
+                    <input type="number" class="form-control" id="two_room_count" name="two_room_count" min="0" value="0">
+                  </div>
+                </div>
+                <div class="col-md-4">
+                  <div class="mb-3">
+                    <label for="two_room_rent" class="form-label">Rent per 2 Room Set</label>
+                    <div class="input-group">
+                      <span class="input-group-text">$</span>
+                      <input type="number" class="form-control" id="two_room_rent" name="two_room_rent" min="0" value="0">
+                    </div>
+                  </div>
+                </div>
+                <div class="col-md-4">
+                  <div class="mb-3">
+                    <label for="two_room_electricity" class="form-label">Electricity Charge</label>
+                    <div class="input-group">
+                      <span class="input-group-text">$</span>
+                      <input type="number" class="form-control" id="two_room_electricity" name="two_room_electricity" min="0" value="0">
+                    </div>
+                  </div>
+                </div>
+                <div class="col-md-4">
+                  <div class="mb-3">
+                    <label for="two_room_water" class="form-label">Water Charge</label>
+                    <div class="input-group">
+                      <span class="input-group-text">$</span>
+                      <input type="number" class="form-control" id="two_room_water" name="two_room_water" min="0" value="0">
+                    </div>
+                  </div>
+                </div>
+                <div class="col-md-4">
+                  <div class="mb-3">
+                    <label for="two_room_security" class="form-label">Security Deposit</label>
+                    <div class="input-group">
+                      <span class="input-group-text">$</span>
+                      <input type="number" class="form-control" id="two_room_security" name="two_room_security" min="0" value="0">
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <!-- You can add more room types here if needed -->
+          </div>
+        </div>
+        <button type="submit" class="btn btn-primary">Add Property</button>
+        <a href="{{ url_for('index') }}" class="btn btn-secondary">Cancel</a>
+      </form>
+    </div>
+  </main>
+
+  <!-- Vendor JS Files -->
+  <script src="{{ url_for('static', filename='assets/vendor/bootstrap/js/bootstrap.bundle.min.js') }}"></script>
+  <script src="{{ url_for('static', filename='assets/vendor/aos/aos.js') }}"></script>
+  <script src="{{ url_for('static', filename='assets/vendor/glightbox/js/glightbox.min.js') }}"></script>
+  <script src="{{ url_for('static', filename='assets/vendor/imagesloaded/imagesloaded.pkgd.min.js') }}"></script>
+  <script src="{{ url_for('static', filename='assets/vendor/isotope-layout/isotope.pkgd.min.js') }}"></script>
+  <script src="{{ url_for('static', filename='assets/vendor/swiper/swiper-bundle.min.js') }}"></script>
+  <script src="{{ url_for('static', filename='assets/js/main.js') }}"></script>
+</body>
+</html>
