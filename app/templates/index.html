@@ -53,13 +53,13 @@
           <li><a href="{{ url_for('my_properties') }}">Properties</a></li>
           <li><a href="{{ url_for('list_tenants') }}">Tenants</a></li>
           <li><a href="#bills">Bills</a></li>
-          <li><a href="#inventory">Inventory</a></li>
+          <!-- <li><a href="#inventory">Inventory</a></li> -->
           <li class="dropdown">
             <a href="#"><span>Reports</span> <i class="bi bi-chevron-down toggle-dropdown"></i></a>
             <ul>
               <li><a href="#rent-reports">Rent Collection</a></li>
               <li><a href="#maintenance-reports">Maintenance</a></li>
-              <li><a href="#inventory-reports">Inventory Status</a></li>
+              <!-- <li><a href="#inventory-reports">Inventory Status</a></li> -->
             </ul>
           </li>
           <li><a href="#contact">Contact</a></li>
@@ -300,13 +300,13 @@
     </section>
 
     <!-- Inventory Section -->
+    <!--
     <section id="inventory" class="section light-background">
       <div class="container" data-aos="fade-up">
         <div class="section-title">
           <h2>Inventory</h2>
           <p>Track and update inventory items for each property.</p>
         </div>
-        <!-- Example inventory table -->
         <div class="table-responsive">
           <table class="table table-bordered">
             <thead>
@@ -328,7 +328,6 @@
                   <a href="#edit-inventory" class="btn btn-sm btn-primary">Edit</a>
                 </td>
               </tr>
-              <!-- More inventory items -->
             </tbody>
           </table>
         </div>
@@ -337,21 +336,76 @@
         </div>
       </div>
     </section>
+    -->
 
     <!-- Reports Section -->
     <section id="rent-reports" class="section">
       <div class="container" data-aos="fade-up">
         <div class="section-title">
           <h2>Rent Collection Reports</h2>
-          <p>View annual rent collection and trends.</p>
+          <p>Track your rental income and payment trends with detailed analytics</p>
         </div>
-        <!-- Placeholder for chart -->
-        <div class="text-center">
-          <img src="{{ url_for('static', filename='assets/img/charts/rent-collection-sample.png') }}" alt="Rent Collection Chart" class="img-fluid" style="max-width: 600px;">
-        </div>
+
+        {% if session.get('user_id') %}
+          <!-- Property-wise Collection -->
+          <div class="card border-0 shadow-sm">
+            <div class="card-body p-4">
+              <h5 class="card-title mb-4">Property-wise Collection</h5>
+              <div class="table-responsive">
+                <table class="table table-hover">
+                  <thead>
+                    <tr>
+                      <th>Property</th>
+                      <th>Total Expected</th>
+                      <th>Collected</th>
+                      <th>Pending</th>
+                      <th>Collection Rate</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {% for property in property_collections %}
+                    <tr>
+                      <td>{{ property.name }}</td>
+                      <td>₹{{ "%.2f"|format(property.expected) }}</td>
+                      <td class="text-success">₹{{ "%.2f"|format(property.collected) }}</td>
+                      <td class="text-danger">₹{{ "%.2f"|format(property.pending) }}</td>
+                      <td>
+                        <div class="progress" style="height: 6px;">
+                          <div class="progress-bar bg-success" role="progressbar" 
+                               style="width: {{ property.collection_rate }}%" 
+                               aria-valuenow="{{ property.collection_rate }}" 
+                               aria-valuemin="0" 
+                               aria-valuemax="100"></div>
+                        </div>
+                        <small class="text-muted">{{ property.collection_rate }}%</small>
+                      </td>
+                    </tr>
+                    {% endfor %}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+
+          <!-- Monthly Trends -->
+          <div class="row mt-4">
+            <div class="col-lg-8 mx-auto">
+              <div class="card border-0 shadow-sm">
+                <div class="card-body p-4">
+                  <h5 class="card-title mb-4">Monthly Collection Trends</h5>
+                  <canvas id="monthlyTrendsChart" height="200"></canvas>
+                </div>
+              </div>
+            </div>
+          </div>
+        {% else %}
+          <div class="text-center">
+            <p class="mb-4">Please login to view your rent collection reports.</p>
+            <a href="{{ url_for('login') }}" class="btn btn-primary">Login</a>
+          </div>
+        {% endif %}
       </div>
     </section>
-
 
     <!-- Contact Section -->
     <section id="contact" class="contact section">
@@ -624,7 +678,58 @@
       font-weight: bold;
       color: #495057;
     }
+    .progress {
+      background-color: #e9ecef;
+      border-radius: 3px;
+    }
   </style>
+
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script>
+    document.addEventListener('DOMContentLoaded', function() {
+      // Monthly Trends Chart
+      const monthlyTrendsCtx = document.getElementById('monthlyTrendsChart').getContext('2d');
+      new Chart(monthlyTrendsCtx, {
+        type: 'line',
+        data: {
+          labels: {{ monthly_labels|tojson }},
+          datasets: [{
+            label: 'Collection',
+            data: {{ monthly_collections|tojson }},
+            borderColor: '#4CAF50',
+            backgroundColor: 'rgba(76, 175, 80, 0.1)',
+            tension: 0.4,
+            fill: true
+          }, {
+            label: 'Expected',
+            data: {{ monthly_expected|tojson }},
+            borderColor: '#2196F3',
+            backgroundColor: 'rgba(33, 150, 243, 0.1)',
+            tension: 0.4,
+            fill: true
+          }]
+        },
+        options: {
+          responsive: true,
+          plugins: {
+            legend: {
+              position: 'top',
+            }
+          },
+          scales: {
+            y: {
+              beginAtZero: true,
+              ticks: {
+                callback: function(value) {
+                  return '₹' + value;
+                }
+              }
+            }
+          }
+        }
+      });
+    });
+  </script>
 
   <script>
     document.addEventListener('DOMContentLoaded', function() {

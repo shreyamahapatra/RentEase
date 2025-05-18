@@ -1,5 +1,6 @@
 from flask import render_template, request, redirect, url_for, flash, jsonify, session, send_file
-from app import app  # or from . import app if using a package
+from app import app, mail  # Import mail from app
+from flask_mail import Message
 from werkzeug.security import generate_password_hash, check_password_hash
 import sqlite3
 import os
@@ -8,10 +9,14 @@ from datetime import datetime, timedelta
 import pandas as pd
 import io
 
+def get_db():
+    conn = sqlite3.connect('rentease.db')
+    conn.row_factory = sqlite3.Row
+    return conn
 
 # Database initialization
 def init_db():
-    conn = sqlite3.connect('rentease.db')
+    conn = get_db()
     c = conn.cursor()
     
     # # Drop existing tables in reverse order of dependencies
@@ -25,7 +30,9 @@ def init_db():
     c.execute('''CREATE TABLE IF NOT EXISTS users
                  (id INTEGER PRIMARY KEY AUTOINCREMENT,
                   username TEXT UNIQUE NOT NULL,
-                  password TEXT NOT NULL)''')
+                  password TEXT NOT NULL,
+                  email TEXT UNIQUE NOT NULL)''')
+    
     c.execute('''CREATE TABLE IF NOT EXISTS properties
                  (id INTEGER PRIMARY KEY AUTOINCREMENT,
                   name TEXT NOT NULL,
@@ -90,13 +97,14 @@ init_db()
 @app.route('/index')
 def index():
     if 'user_id' in session:
-        conn = sqlite3.connect('rentease.db')
+        conn = get_db()
         c = conn.cursor()
         properties = c.execute('SELECT * FROM properties WHERE user_id = ?', (session['user_id'],)).fetchall()
         
-        # Get tenants data with payment information
-        current_month = datetime.now().month
-        current_year = datetime.now().year
+        # Get current month and year
+        current_date = datetime.now()
+        current_month = current_date.month
+        current_year = current_date.year
         
         # Calculate previous month and year
         if current_month == 1:
@@ -106,8 +114,9 @@ def index():
             prev_month = current_month - 1
             prev_year = current_year
         
+        # Get tenants data with payment information
         tenants = c.execute('''
-            SELECT t.*, p.name as property_name, r.room_number, rc.room_type, rc.rent, rc.electricity_charge, rc.water_charge,
+            SELECT t.*, p.name as property_name, r.room_number, rc.room_type, rc.rent, rc.electricity_charge, rc.water_charge, rc.security_deposit,
                    COALESCE(SUM(CASE 
                         WHEN strftime('%m', bp.payment_date) = ? AND strftime('%Y', bp.payment_date) = ? 
                         THEN bp.amount 
@@ -117,11 +126,7 @@ def index():
                         WHEN strftime('%m', bp.payment_date) = ? AND strftime('%Y', bp.payment_date) = ? 
                         THEN bp.amount 
                         ELSE 0 
-                   END), 0) as prev_month_paid,
-                   COUNT(CASE 
-                        WHEN strftime('%m', bp.payment_date) = ? AND strftime('%Y', bp.payment_date) = ? 
-                        THEN 1 
-                   END) as has_prev_month_entry
+                   END), 0) as prev_month_paid
             FROM tenants t
             JOIN properties p ON t.property_id = p.id
             JOIN rooms r ON t.room_id = r.id
@@ -133,67 +138,118 @@ def index():
             GROUP BY t.id
         ''', (str(current_month).zfill(2), str(current_year),
               str(prev_month).zfill(2), str(prev_year),
-              str(prev_month).zfill(2), str(prev_year),
               str(current_month).zfill(2), str(prev_month).zfill(2),
               str(current_year), str(prev_year),
               session['user_id'])).fetchall()
         
-        # Format tenants data and calculate total pending
-        formatted_tenants = []
+        # Calculate total collection and pending amounts
+        total_collection = 0
         total_pending = 0
-        current_date = datetime.now()
+        total_expected = 0
         
-        for tenant in tenants:
-            # Calculate bill amount
-            rent = float(tenant[10])  # rent from room_configurations
-            electricity = float(tenant[11])  # electricity_charge
-            water = float(tenant[12])  # water_charge
-            total_amount = rent + electricity + water
+        # Get monthly data for the last 6 months
+        monthly_labels = []
+        monthly_collections = []
+        monthly_expected = []
+        
+        for i in range(6):
+            month_date = current_date - timedelta(days=30*i)
+            year = month_date.year
+            month = month_date.month
+            month_str = month_date.strftime('%b %Y')
+            monthly_labels.insert(0, month_str)
             
-            # Get move-in date
-            move_in_date = datetime.strptime(tenant[5], '%Y-%m-%d')
+            # Get monthly totals
+            c.execute('''
+                SELECT 
+                    COALESCE(SUM(bp.amount), 0) as paid_amount,
+                    COUNT(DISTINCT t.id) * (
+                        CASE 
+                            WHEN strftime('%Y-%m', t.move_in_date) = ? THEN 
+                                rc.rent + rc.electricity_charge + rc.water_charge + rc.security_deposit
+                            ELSE 
+                                rc.rent + rc.electricity_charge + rc.water_charge
+                        END
+                    ) as expected_total
+                FROM tenants t
+                JOIN rooms r ON t.room_id = r.id
+                JOIN properties p ON r.property_id = p.id
+                JOIN room_configurations rc ON r.room_config_id = rc.id
+                LEFT JOIN bill_payments bp ON t.id = bp.tenant_id 
+                    AND strftime('%Y', bp.payment_date) = ? 
+                    AND strftime('%m', bp.payment_date) = ?
+                WHERE p.user_id = ?
+            ''', (f"{year}-{month:02d}", str(year), f"{month:02d}", session['user_id']))
             
-            # Calculate due date (same day of month as move-in)
-            due_date = current_date.replace(day=move_in_date.day)
-            if due_date < current_date:
-                due_date = (due_date.replace(day=1) + timedelta(days=32)).replace(day=1)
+            result = c.fetchone()
+            monthly_collections.insert(0, result['paid_amount'] if result else 0)
+            monthly_expected.insert(0, result['expected_total'] if result else 0)
+        
+        # Calculate property-wise collections
+        property_collections = []
+        for property in properties:
+            c.execute('''
+                SELECT 
+                    COALESCE(SUM(bp.amount), 0) as collected,
+                    COUNT(DISTINCT t.id) * (
+                        CASE 
+                            WHEN strftime('%Y-%m', t.move_in_date) = strftime('%Y-%m', 'now') THEN 
+                                rc.rent + rc.electricity_charge + rc.water_charge + rc.security_deposit
+                            ELSE 
+                                rc.rent + rc.electricity_charge + rc.water_charge
+                        END
+                    ) as expected
+                FROM tenants t
+                JOIN rooms r ON t.room_id = r.id
+                JOIN room_configurations rc ON r.room_config_id = rc.id
+                LEFT JOIN bill_payments bp ON t.id = bp.tenant_id 
+                    AND strftime('%Y-%m', bp.payment_date) = strftime('%Y-%m', 'now')
+                WHERE t.property_id = ?
+                GROUP BY t.property_id
+            ''', (property[0],))
             
-            # Calculate pending amount
-            current_month_paid = float(tenant[13])  # current_month_paid
-            prev_month_paid = float(tenant[14])  # prev_month_paid
-            prev_month_pending = total_amount - prev_month_paid if prev_month_paid < total_amount else 0
-            pending_amount = total_amount + prev_month_pending - current_month_paid
-            
-            # Only add tenants with pending amounts
-            if pending_amount > 0:
-                total_pending += pending_amount
-                formatted_tenants.append({
-                    'id': tenant[0],
-                    'name': tenant[1],
-                    'property_id': tenant[2],
-                    'room_id': tenant[3],
-                    'phone_number': tenant[4],
-                    'move_in_date': tenant[5],
-                    'police_verification': tenant[6],
-                    'property_name': tenant[7],
-                    'room_number': tenant[8],
-                    'room_type': tenant[9],
-                    'rent': tenant[10],
-                    'electricity': tenant[11],
-                    'water': tenant[12],
-                    'current_month_paid': current_month_paid,
-                    'prev_month_pending': prev_month_pending,
-                    'total_amount': total_amount,
-                    'due_date': due_date.strftime('%Y-%m-%d'),
-                    'pending_amount': pending_amount
+            result = c.fetchone()
+            if result:
+                collected = result['collected']
+                expected = result['expected']
+                pending = expected - collected
+                collection_rate = (collected / expected * 100) if expected > 0 else 0
+                
+                property_collections.append({
+                    'name': property[1],
+                    'expected': expected,
+                    'collected': collected,
+                    'pending': pending,
+                    'collection_rate': round(collection_rate, 1)
                 })
+                
+                total_collection += collected
+                total_pending += pending
+                total_expected += expected
+        
+        # Calculate overall collection rate
+        collection_rate = (total_collection / total_expected * 100) if total_expected > 0 else 0
         
         conn.close()
         return render_template('index.html', 
                              properties=properties, 
-                             tenants=formatted_tenants,
-                             total_pending=total_pending)
-    return render_template('index.html', tenants=[], total_pending=0)
+                             tenants=tenants,
+                             total_pending=total_pending,
+                             total_collection=total_collection,
+                             collection_rate=round(collection_rate, 1),
+                             monthly_labels=monthly_labels,
+                             monthly_collections=monthly_collections,
+                             monthly_expected=monthly_expected,
+                             property_collections=property_collections)
+    return render_template('index.html', 
+                         tenants=[], 
+                         total_pending=0,
+                         total_collection=0,
+                         collection_rate=0,
+                         monthly_labels=[],
+                         monthly_collections=[],
+                         monthly_expected=[],
+                         property_collections=[])
 
 @app.route('/login', methods=['GET', 'POST'])
 def login():
@@ -201,11 +257,12 @@ def login():
         username = request.form.get('username')
         password = request.form.get('password')
         
-        conn = sqlite3.connect('rentease.db')
+        conn = get_db()
         c = conn.cursor()
         user = c.execute('SELECT * FROM users WHERE username = ?', (username,)).fetchone()
         conn.close()
         
+        print(user)
         if user and user[2] == password:
             session['user_id'] = user[0]
             session['username'] = user[1]
@@ -221,21 +278,53 @@ def register():
     if request.method == 'POST':
         username = request.form.get('username')
         password = request.form.get('password')
+        email = request.form.get('email')
         
-        if not username or not password:
+        if not username or not password or not email:
             flash('Please fill in all fields', 'danger')
             return redirect(url_for('register'))
         
-        # hashed_password = generate_password_hash(password, method='pbkdf2:sha256')
-        
         try:
-            conn = sqlite3.connect('rentease.db')
+            conn = get_db()
             c = conn.cursor()
-            c.execute('INSERT INTO users (username, password) VALUES (?, ?)',
-                     (username, password))
+            
+            # Check if username already exists
+            existing_user = c.execute('SELECT * FROM users WHERE username = ?', 
+                                    (username,)).fetchone()
+            if existing_user:
+                flash('Username already exists', 'danger')
+                return redirect(url_for('register'))
+            
+            # Insert new user
+            c.execute('INSERT INTO users (username, password, email) VALUES (?, ?, ?)',
+                     (username, password, email))
             conn.commit()
+            
+            # Send welcome email
+            try:
+                msg = Message(
+                    'Welcome to RentEase!',
+                    recipients=[email]
+                )
+                msg.body = f'''Welcome to RentEase!
+
+Thank you for registering with us. Your account has been successfully created.
+
+Your login details:
+Username: {username}
+
+You can now log in to your account and start managing your properties.
+
+Best regards,
+The RentEase Team'''
+                
+                mail.send(msg)
+                flash('Registration successful! A welcome email has been sent to your email address.', 'success')
+            except Exception as e:
+                print(f"Failed to send email: {str(e)}")
+                flash('Registration successful! However, we could not send the welcome email.', 'warning')
+            
             conn.close()
-            flash('Registration successful! Please login.', 'success')
             return redirect(url_for('login'))
         except sqlite3.IntegrityError:
             flash('Username already exists', 'danger')
@@ -260,7 +349,7 @@ def add_property():
         address = request.form.get('address')
         user_id = session['user_id']
         
-        conn = sqlite3.connect('rentease.db')
+        conn = get_db()
         c = conn.cursor()
         c.execute('INSERT INTO properties (name, address, user_id) VALUES (?, ?, ?)',
                  (name, address, user_id))
@@ -315,7 +404,7 @@ def add_tenant():
             filename = f"police_verification_{property_id}_{room_id}_{int(time.time())}.pdf"
             police_verification.save(os.path.join('app/static/uploads', filename))
         
-        conn = sqlite3.connect('rentease.db')
+        conn = get_db()
         c = conn.cursor()
         
         # Check if room is already occupied
@@ -350,7 +439,7 @@ def add_tenant():
         return redirect(url_for('list_tenants'))
 
     # Get all properties for the logged-in user with their rooms
-    conn = sqlite3.connect('rentease.db')
+    conn = get_db()
     c = conn.cursor()
     
     # Get all properties for the logged-in user with their rooms
@@ -408,7 +497,7 @@ def list_tenants():
         flash('Please login to access this page', 'warning')
         return redirect(url_for('login'))
     
-    conn = sqlite3.connect('rentease.db')
+    conn = get_db()
     c = conn.cursor()
     
     # Get all properties for the user
@@ -468,7 +557,7 @@ def delete_tenant(tenant_id):
         flash('Please login to access this page', 'warning')
         return redirect(url_for('login'))
     
-    conn = sqlite3.connect('rentease.db')
+    conn = get_db()
     c = conn.cursor()
     
     # Get tenant's police verification file
@@ -507,7 +596,7 @@ def my_properties():
         flash('Please login to access this page', 'warning')
         return redirect(url_for('login'))
     
-    conn = sqlite3.connect('rentease.db')
+    conn = get_db()
     c = conn.cursor()
     
     # Get all properties for the logged-in user with their room configurations
@@ -560,7 +649,7 @@ def edit_property(property_id):
         flash('Please login to access this page', 'warning')
         return redirect(url_for('login'))
     
-    conn = sqlite3.connect('rentease.db')
+    conn = get_db()
     c = conn.cursor()
     
     if request.method == 'POST':
@@ -633,7 +722,7 @@ def delete_property(property_id):
         flash('Please login to access this page', 'warning')
         return redirect(url_for('login'))
     
-    conn = sqlite3.connect('rentease.db')
+    conn = get_db()
     c = conn.cursor()
     
     # First delete room configurations
@@ -655,7 +744,7 @@ def edit_tenant(tenant_id):
         flash('Please login to access this page', 'warning')
         return redirect(url_for('login'))
     
-    conn = sqlite3.connect('rentease.db')
+    conn = get_db()
     c = conn.cursor()
     
     if request.method == 'POST':
@@ -747,7 +836,7 @@ def add_room(property_id):
         return redirect(url_for('login'))
     
     # Verify property ownership
-    conn = sqlite3.connect('rentease.db')
+    conn = get_db()
     c = conn.cursor()
     property = c.execute('SELECT * FROM properties WHERE id = ? AND user_id = ?', 
                         (property_id, session['user_id'])).fetchone()
@@ -817,7 +906,7 @@ def view_rooms(property_id):
         flash('Please login to access this page', 'warning')
         return redirect(url_for('login'))
     
-    conn = sqlite3.connect('rentease.db')
+    conn = get_db()
     c = conn.cursor()
     
     # Get property details
@@ -870,7 +959,7 @@ def view_bills():
         flash('Please login to access this page', 'warning')
         return redirect(url_for('login'))
     
-    conn = sqlite3.connect('rentease.db')
+    conn = get_db()
     c = conn.cursor()
     
     # Get current month's bills
@@ -941,121 +1030,179 @@ def view_bills():
                          total_pending=total_pending,
                          current_month=current_date.strftime('%B %Y'))
 
+@app.route('/monthly-bills/<int:year>/<int:month>')
+def monthly_bills(year, month):
+    if 'user_id' not in session:
+        return redirect(url_for('login'))
+    
+    # Get month name
+    month_name = datetime(year, month, 1).strftime('%B %Y')
+    
+    # Get all tenants with their bills for the specified month
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute('''
+        SELECT 
+            p.name as property_name,
+            t.name as tenant_name,
+            r.room_number,
+            rc.rent as rent_amount,
+            COALESCE(SUM(bp.amount), 0) as paid_amount,
+            rc.electricity_charge as electricity_rate,
+            rc.water_charge as water_rate,
+            t.id as tenant_id,
+            t.move_in_date,
+            CASE 
+                WHEN t.move_in_date <= date('now') THEN date('now', 'start of month', '+4 days')
+                ELSE date(t.move_in_date, 'start of month', '+4 days')
+            END as due_date
+        FROM tenants t
+        JOIN rooms r ON t.room_id = r.id
+        JOIN properties p ON r.property_id = p.id
+        JOIN room_configurations rc ON r.room_config_id = rc.id
+        LEFT JOIN bill_payments bp ON t.id = bp.tenant_id 
+            AND strftime('%Y', bp.payment_date) = ? 
+            AND strftime('%m', bp.payment_date) = ?
+        WHERE t.user_id = ?
+        GROUP BY t.id
+    ''', (str(year), f"{month:02d}", session['user_id']))
+    
+    tenants = cursor.fetchall()
+    
+    # Calculate monthly totals
+    monthly_stats = {
+        'paid': sum(tenant['paid_amount'] for tenant in tenants),
+        'pending': sum(tenant['rent_amount'] + tenant['electricity_rate'] + tenant['water_rate'] - tenant['paid_amount'] for tenant in tenants)
+    }
+    
+    # Get today's date for the payment form
+    today_date = datetime.now().strftime('%Y-%m-%d')
+    
+    conn.close()
+    return render_template('monthly_bills.html', 
+                         tenants=tenants,
+                         month_name=month_name,
+                         monthly_stats=monthly_stats,
+                         today_date=today_date)
+
 @app.route('/all-bills')
 def all_bills():
     if 'user_id' not in session:
         return redirect(url_for('login'))
     
-    conn = sqlite3.connect('rentease.db')
-    c = conn.cursor()
+    conn = get_db()
+    cursor = conn.cursor()
     
-    # Get all properties for the user
-    properties = c.execute('''
-        SELECT id, name FROM properties WHERE user_id = ?
-    ''', (session['user_id'],)).fetchall()
-    
-    # Get current month's bills for all tenants
-    current_month = datetime.now().month
-    current_year = datetime.now().year
-    
-    # Calculate previous month and year
-    if current_month == 1:
-        prev_month = 12
-        prev_year = current_year - 1
-    else:
-        prev_month = current_month - 1
-        prev_year = current_year
-    
-    tenants = c.execute('''
-        SELECT t.*, p.name as property_name, r.room_number, rc.room_type, rc.rent, rc.electricity_charge, rc.water_charge,
-               COALESCE(SUM(CASE 
-                    WHEN strftime('%m', bp.payment_date) = ? AND strftime('%Y', bp.payment_date) = ? 
-                    THEN bp.amount 
-                    ELSE 0 
-               END), 0) as current_month_paid,
-               COALESCE(SUM(CASE 
-                    WHEN strftime('%m', bp.payment_date) = ? AND strftime('%Y', bp.payment_date) = ? 
-                    THEN bp.amount 
-                    ELSE 0 
-               END), 0) as prev_month_paid,
-               COUNT(CASE 
-                    WHEN strftime('%m', bp.payment_date) = ? AND strftime('%Y', bp.payment_date) = ? 
-                    THEN 1 
-               END) as has_prev_month_entry
+    # Get all tenants with their bills
+    cursor.execute('''
+        SELECT 
+            p.name as property_name,
+            t.name as tenant_name,
+            r.room_number,
+            rc.rent as rent_amount,
+            COALESCE(SUM(bp.amount), 0) as paid_amount,
+            rc.electricity_charge as electricity_rate,
+            rc.water_charge as water_rate,
+            t.id as tenant_id,
+            t.move_in_date,
+            CASE 
+                WHEN t.move_in_date <= date('now') THEN date('now', 'start of month', '+4 days')
+                ELSE date(t.move_in_date, 'start of month', '+4 days')
+            END as due_date,
+            p.id as property_id,
+            (rc.rent + rc.electricity_charge + rc.water_charge) as total_amount,
+            (rc.rent + rc.electricity_charge + rc.water_charge - COALESCE(SUM(bp.amount), 0)) as pending_amount,
+            COALESCE((
+                SELECT SUM(amount) 
+                FROM bill_payments 
+                WHERE tenant_id = t.id 
+                AND strftime('%Y-%m', payment_date) = strftime('%Y-%m', date('now', '-1 month'))
+            ), 0) as prev_month_paid,
+            (rc.rent + rc.electricity_charge + rc.water_charge - COALESCE((
+                SELECT SUM(amount) 
+                FROM bill_payments 
+                WHERE tenant_id = t.id 
+                AND strftime('%Y-%m', payment_date) = strftime('%Y-%m', date('now', '-1 month'))
+            ), 0)) as prev_month_pending
         FROM tenants t
-        JOIN properties p ON t.property_id = p.id
         JOIN rooms r ON t.room_id = r.id
+        JOIN properties p ON r.property_id = p.id
         JOIN room_configurations rc ON r.room_config_id = rc.id
         LEFT JOIN bill_payments bp ON t.id = bp.tenant_id 
-            AND (strftime('%m', bp.payment_date) IN (?, ?) 
-                AND strftime('%Y', bp.payment_date) IN (?, ?))
+            AND strftime('%Y-%m', bp.payment_date) = strftime('%Y-%m', 'now')
         WHERE p.user_id = ?
         GROUP BY t.id
-    ''', (str(current_month).zfill(2), str(current_year),
-          str(prev_month).zfill(2), str(prev_year),
-          str(prev_month).zfill(2), str(prev_year),
-          str(current_month).zfill(2), str(prev_month).zfill(2),
-          str(current_year), str(prev_year),
-          session['user_id'])).fetchall()
+    ''', (session['user_id'],))
     
-    formatted_tenants = []
-    total_pending = 0
+    tenants = cursor.fetchall()
     
-    for tenant in tenants:
-        # Calculate total amount
-        total_amount = float(tenant[10]) + float(tenant[11]) + float(tenant[12])  # rent + electricity + water
-        current_month_paid = float(tenant[13])  # current month paid
-        prev_month_paid = float(tenant[14])  # previous month paid
-        has_prev_month_entry = int(tenant[15]) > 0  # check if there are previous month entries
+    # Calculate total statistics
+    total_stats = {
+        'total': sum(tenant['total_amount'] for tenant in tenants),
+        'paid': sum(tenant['paid_amount'] for tenant in tenants),
+        'pending': sum(tenant['pending_amount'] for tenant in tenants)
+    }
+    
+    # Get last 6 months for the monthly overview
+    today = datetime.now()
+    months = []
+    monthly_totals = {}
+    
+    for i in range(6):
+        month_date = today - timedelta(days=30*i)
+        year = month_date.year
+        month = month_date.month
         
-        print(f"Debug - Tenant {tenant[1]}:")
-        print(f"  Current Month Paid: {current_month_paid}")
-        print(f"  Total Amount: {total_amount}")
-        print(f"  Previous Month Paid: {prev_month_paid}")
-        print(f"  Has Previous Month Entry: {has_prev_month_entry}")
+        # Get monthly totals
+        cursor.execute('''
+            SELECT 
+                COALESCE(SUM(bp.amount), 0) as paid_amount,
+                COUNT(DISTINCT t.id) * (rc.rent + rc.electricity_charge + rc.water_charge) as expected_total
+            FROM tenants t
+            JOIN rooms r ON t.room_id = r.id
+            JOIN properties p ON r.property_id = p.id
+            JOIN room_configurations rc ON r.room_config_id = rc.id
+            LEFT JOIN bill_payments bp ON t.id = bp.tenant_id 
+                AND strftime('%Y', bp.payment_date) = ? 
+                AND strftime('%m', bp.payment_date) = ?
+            WHERE p.user_id = ?
+        ''', (str(year), f"{month:02d}", session['user_id']))
         
-        # Calculate previous month's pending amount only if there are previous month entries
-        prev_month_pending = (total_amount - prev_month_paid) if has_prev_month_entry else 0
+        result = cursor.fetchone()
+        monthly_totals[f"{year}-{month:02d}"] = {
+            'paid': result['paid_amount'] if result else 0,
+            'pending': (result['expected_total'] - result['paid_amount']) if result else 0
+        }
         
-        # Total pending is previous month's pending plus current month's amount minus current month's paid
-        pending_amount = prev_month_pending + (total_amount - current_month_paid)
-        total_pending += pending_amount
-        
-        # Calculate due date (5th of next month)
-        move_in_date = datetime.strptime(tenant[5], '%Y-%m-%d')
-        due_date = datetime(current_year, current_month, 5)
-        if move_in_date.day > 5:
-            due_date = (due_date.replace(day=1) + timedelta(days=32)).replace(day=5)
-        
-        formatted_tenants.append({
-            'id': tenant[0],
-            'property_id': tenant[2],
-            'property_name': tenant[7],
-            'name': tenant[1],
-            'room_number': tenant[8],
-            'rent': tenant[10],
-            'electricity': tenant[11],
-            'water': tenant[12],
-            'total_amount': total_amount,
-            'current_month_paid': current_month_paid,
-            'prev_month_pending': prev_month_pending,
-            'pending_amount': pending_amount,
-            'due_date': due_date.strftime('%Y-%m-%d')
-        })
+        months.append(month_date)
+    
+    # Get all properties for the filter dropdown
+    properties = cursor.execute('''
+        SELECT id, name 
+        FROM properties 
+        WHERE user_id = ?
+    ''', (session['user_id'],)).fetchall()
+    
+    # Get today's date for the payment form
+    today_date = today.strftime('%Y-%m-%d')
     
     conn.close()
-    return render_template('all_bills.html', 
-                         tenants=formatted_tenants, 
+    return render_template('all_bills.html',
+                         tenants=tenants,
+                         total_stats=total_stats,
+                         months=months,
+                         monthly_totals=monthly_totals,
                          properties=properties,
-                         total_pending=total_pending,
-                         current_month=datetime.now().strftime('%B %Y'))
+                         today_date=today_date,
+                         total_pending=total_stats['pending'],
+                         current_month=today.strftime('%B %Y'))
 
 @app.route('/bill-payments/<int:tenant_id>')
 def bill_payments(tenant_id):
     if 'user_id' not in session:
         return redirect(url_for('login'))
     
-    conn = sqlite3.connect('rentease.db')
+    conn = get_db()
     c = conn.cursor()
     
     # Get tenant details
@@ -1136,7 +1283,7 @@ def add_payment():
     print(f"Mode: {payment_mode}")
     print(f"Notes: {notes}")
     
-    conn = sqlite3.connect('rentease.db')
+    conn = get_db()
     c = conn.cursor()
     
     # Verify tenant belongs to user and get their charges
@@ -1219,7 +1366,7 @@ def export_bills():
         flash('Please login to access this page', 'warning')
         return redirect(url_for('login'))
     
-    conn = sqlite3.connect('rentease.db')
+    conn = get_db()
     c = conn.cursor()
     
     # Get current month's bills for all tenants
@@ -1333,3 +1480,80 @@ def export_bills():
         as_attachment=True,
         download_name=filename
     )
+
+@app.route('/api/monthly-bills/<string:month>')
+def api_monthly_bills(month):
+    if 'user_id' not in session:
+        return jsonify({'error': 'Not logged in'}), 401
+    
+    property_id = request.args.get('property_id')
+    
+    conn = get_db()
+    cursor = conn.cursor()
+    
+    # Parse month string (format: YYYY-MM)
+    year, month = month.split('-')
+    
+    # Base query
+    query = '''
+        SELECT 
+            p.name as property_name,
+            t.name as tenant_name,
+            r.room_number,
+            rc.rent as rent_amount,
+            COALESCE(SUM(bp.amount), 0) as paid_amount,
+            rc.electricity_charge as electricity_rate,
+            rc.water_charge as water_rate,
+            t.id as tenant_id,
+            t.move_in_date,
+            CASE 
+                WHEN t.move_in_date <= date('now') THEN date('now', 'start of month', '+4 days')
+                ELSE date(t.move_in_date, 'start of month', '+4 days')
+            END as due_date,
+            (rc.rent + rc.electricity_charge + rc.water_charge) as total_amount,
+            (rc.rent + rc.electricity_charge + rc.water_charge - COALESCE(SUM(bp.amount), 0)) as pending_amount
+        FROM tenants t
+        JOIN rooms r ON t.room_id = r.id
+        JOIN properties p ON r.property_id = p.id
+        JOIN room_configurations rc ON r.room_config_id = rc.id
+        LEFT JOIN bill_payments bp ON t.id = bp.tenant_id 
+            AND strftime('%Y', bp.payment_date) = ? 
+            AND strftime('%m', bp.payment_date) = ?
+        WHERE p.user_id = ?
+        AND strftime('%Y-%m', t.move_in_date) <= ?
+    '''
+    
+    params = [year, month, session['user_id'], f"{year}-{month}"]
+    
+    # Add property filter if specified
+    if property_id:
+        query += ' AND p.id = ?'
+        params.append(property_id)
+    
+    query += ' GROUP BY t.id'
+    
+    cursor.execute(query, params)
+    tenants = cursor.fetchall()
+    
+    # Convert Row objects to dictionaries
+    tenants_list = []
+    for tenant in tenants:
+        tenant_dict = dict(tenant)
+        # Convert numeric values to float
+        for key in ['rent_amount', 'paid_amount', 'electricity_rate', 'water_rate', 'total_amount', 'pending_amount']:
+            tenant_dict[key] = float(tenant_dict[key])
+        tenants_list.append(tenant_dict)
+    
+    # Calculate totals
+    total_expected = sum(tenant['total_amount'] for tenant in tenants_list)
+    total_received = sum(tenant['paid_amount'] for tenant in tenants_list)
+    total_pending = sum(tenant['pending_amount'] for tenant in tenants_list)
+    
+    conn.close()
+    
+    return jsonify({
+        'tenants': tenants_list,
+        'total_expected': total_expected,
+        'total_received': total_received,
+        'total_pending': total_pending
+    })

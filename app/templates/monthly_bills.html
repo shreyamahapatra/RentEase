@@ -1,0 +1,278 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="utf-8">
+  <meta content="width=device-width, initial-scale=1.0" name="viewport">
+  <title>{{ month_name }} Bills - RentEase</title>
+  <meta name="description" content="">
+  <meta name="keywords" content="">
+
+  <!-- Favicons -->
+  <link href="{{ url_for('static', filename='assets/img/favicon.png') }}" rel="icon">
+  <link href="{{ url_for('static', filename='assets/img/apple-touch-icon.png') }}" rel="apple-touch-icon">
+
+  <!-- Fonts -->
+  <link href="https://fonts.googleapis.com" rel="preconnect">
+  <link href="https://fonts.gstatic.com" rel="preconnect" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Roboto:ital,wght@0,100;0,300;0,400;0,500;0,700;0,900;1,100;1,300;1,400;1,500;1,700;1,900&family=Poppins:ital,wght@0,100;0,200;0,300;0,400;0,500;0,600;0,700;0,800;0,900;1,100;1,200;1,300;1,400;1,500;1,600;1,700;1,800;1,900&family=Raleway:ital,wght@0,100;0,200;0,300;0,400;0,500;0,600;0,700;0,800;0,900;1,100;1,200;1,300;1,400;1,500;1,600;1,700;1,800;1,900&display=swap" rel="stylesheet">
+
+  <!-- Vendor CSS Files -->
+  <link href="{{ url_for('static', filename='assets/vendor/bootstrap/css/bootstrap.min.css') }}" rel="stylesheet">
+  <link href="{{ url_for('static', filename='assets/vendor/bootstrap-icons/bootstrap-icons.css') }}" rel="stylesheet">
+  <link href="{{ url_for('static', filename='assets/vendor/aos/aos.css') }}" rel="stylesheet">
+
+  <!-- Main CSS File -->
+  <link href="{{ url_for('static', filename='assets/css/main.css') }}" rel="stylesheet">
+</head>
+
+<body class="index-page">
+  <header id="header" class="header d-flex align-items-center fixed-top">
+    <div class="container position-relative d-flex align-items-center justify-content-between">
+      <a href="{{ url_for('index') }}" class="logo d-flex align-items-center me-auto me-xl-0">
+        <h1 class="sitename">RentEase</h1><span>.</span>
+      </a>
+
+      <nav id="navmenu" class="navmenu">
+        <ul>
+          <li><a href="{{ url_for('index') }}#hero">Home</a></li>
+          <li><a href="{{ url_for('index') }}#properties">Properties</a></li>
+          <li><a href="{{ url_for('list_tenants') }}">Tenants</a></li>
+          <li><a href="{{ url_for('index') }}#bills" class="active">Bills</a></li>
+          <li><a href="{{ url_for('index') }}#inventory">Inventory</a></li>
+          <li class="dropdown">
+            <a href="#"><span>Reports</span> <i class="bi bi-chevron-down toggle-dropdown"></i></a>
+            <ul>
+              <li><a href="{{ url_for('index') }}#rent-reports">Rent Collection</a></li>
+              <li><a href="{{ url_for('index') }}#maintenance-reports">Maintenance</a></li>
+              <li><a href="{{ url_for('index') }}#inventory-reports">Inventory Status</a></li>
+            </ul>
+          </li>
+          <li><a href="{{ url_for('index') }}#contact">Contact</a></li>
+        </ul>
+        <i class="mobile-nav-toggle d-xl-none bi bi-list"></i>
+      </nav>
+
+      {% if session.get('user_id') %}
+        <a class="btn-getstarted" href="{{ url_for('logout') }}">Logout</a>
+      {% else %}
+        <a class="btn-getstarted me-1" href="{{ url_for('login') }}">Login</a>
+        <a class="btn-getstarted" href="{{ url_for('register') }}">Register</a>
+      {% endif %}
+    </div>
+  </header>
+
+  <main class="main" style="margin-top: 100px;">
+    <div class="container mt-5">
+      <div class="row mb-4">
+        <div class="col-md-8">
+          <h2>{{ month_name }} Bills</h2>
+          <p class="text-muted">View and manage rent payments for {{ month_name }}</p>
+        </div>
+        <div class="col-md-4 text-md-end">
+          <div class="card border-0 shadow-sm mb-2" style="background: linear-gradient(45deg, #4CAF50, #388E3C);">
+            <div class="card-body p-3">
+              <div class="d-flex justify-content-between align-items-center">
+                <div>
+                  <h6 class="card-title mb-1 text-white-75">Total Received</h6>
+                  <h3 class="mb-0 fw-bold text-white">₹{{ "%.2f"|format(monthly_stats.paid) }}</h3>
+                </div>
+                <i class="bi bi-cash-stack fs-4 text-white opacity-75"></i>
+              </div>
+            </div>
+          </div>
+          <div class="card border-0 shadow-sm" style="background: linear-gradient(45deg, #F44336, #D32F2F);">
+            <div class="card-body p-3">
+              <div class="d-flex justify-content-between align-items-center">
+                <div>
+                  <h6 class="card-title mb-1 text-white-75">Total Pending</h6>
+                  <h3 class="mb-0 fw-bold text-white">₹{{ "%.2f"|format(monthly_stats.pending) }}</h3>
+                </div>
+                <i class="bi bi-hourglass-split fs-4 text-white opacity-75"></i>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-body">
+          <div class="d-flex justify-content-between align-items-center mb-4">
+            <h4 class="mb-0">{{ month_name }} Bills</h4>
+            <div class="btn-group">
+              <a href="{{ url_for('all_bills') }}" class="btn btn-outline-secondary">
+                <i class="bi bi-arrow-left me-2"></i>Back to All Bills
+              </a>
+              <a href="{{ url_for('export_bills') }}" class="btn btn-outline-primary">
+                <i class="bi bi-file-excel me-2"></i>Export to Excel
+              </a>
+            </div>
+          </div>
+
+          <div class="table-responsive">
+            <table class="table table-hover">
+              <thead>
+                <tr>
+                  <th>Property</th>
+                  <th>Tenant</th>
+                  <th>Room</th>
+                  <th>Rent</th>
+                  <th>Electricity</th>
+                  <th>Water</th>
+                  <th>Total Amount</th>
+                  <th>Due Date</th>
+                  <th>Paid Amount</th>
+                  <th>Pending Amount</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for tenant in tenants %}
+                <tr>
+                  <td>{{ tenant[0] }}</td>
+                  <td>{{ tenant[1] }}</td>
+                  <td>{{ tenant[2] }}</td>
+                  <td>₹{{ tenant[3] }}</td>
+                  <td>₹{{ tenant[6] }}</td>
+                  <td>₹{{ tenant[7] }}</td>
+                  <td>₹{{ tenant[3] + tenant[6] + tenant[7] }}</td>
+                  <td>{{ tenant[9] }}</td>
+                  <td class="text-success fw-bold">₹{{ "%.2f"|format(tenant[4]) }}</td>
+                  <td class="text-danger fw-bold">₹{{ "%.2f"|format(tenant[3] + tenant[6] + tenant[7] - tenant[4]) }}</td>
+                  <td>
+                    <div class="dropdown">
+                      <button class="btn btn-sm btn-outline-secondary dropdown-toggle" type="button" data-bs-toggle="dropdown">
+                        Actions
+                      </button>
+                      <ul class="dropdown-menu">
+                        <li>
+                          <a class="dropdown-item" href="#" data-bs-toggle="modal" data-bs-target="#addPaymentModal{{ loop.index }}">
+                            <i class="bi bi-plus-circle me-2"></i>Add Payment
+                          </a>
+                        </li>
+                        <li>
+                          <a class="dropdown-item" href="{{ url_for('bill_payments', tenant_id=tenant.tenant_id) }}">
+                            <i class="bi bi-clock-history me-2"></i>View History
+                          </a>
+                        </li>
+                        <li>
+                          <a class="dropdown-item" href="#" onclick="sendReminder('{{ tenant.tenant_id }}')">
+                            <i class="bi bi-bell me-2"></i>Send Reminder
+                          </a>
+                        </li>
+                      </ul>
+                    </div>
+                  </td>
+                </tr>
+
+                <!-- Add Payment Modal -->
+                <div class="modal fade" id="addPaymentModal{{ loop.index }}" tabindex="-1">
+                  <div class="modal-dialog">
+                    <div class="modal-content">
+                      <div class="modal-header">
+                        <h5 class="modal-title">Add Payment for {{ tenant[1] }}</h5>
+                        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                      </div>
+                      <div class="modal-body">
+                        <form id="addPaymentForm{{ loop.index }}" onsubmit="handlePaymentSubmit(event, '{{ tenant.tenant_id }}')">
+                          <div class="mb-3">
+                            <label for="paymentAmount{{ loop.index }}" class="form-label">Payment Amount (₹)</label>
+                            <input type="number" class="form-control" id="paymentAmount{{ loop.index }}" 
+                                   step="0.01" min="0" max="{{ tenant[3] + tenant[6] + tenant[7] }}" required>
+                          </div>
+                          <div class="mb-3">
+                            <label for="paymentDate{{ loop.index }}" class="form-label">Payment Date</label>
+                            <input type="date" class="form-control" id="paymentDate{{ loop.index }}" 
+                                   value="{{ today_date }}" required>
+                          </div>
+                          <div class="mb-3">
+                            <label for="paymentMode{{ loop.index }}" class="form-label">Payment Mode</label>
+                            <select class="form-select" id="paymentMode{{ loop.index }}" required>
+                              <option value="cash">Cash</option>
+                              <option value="bank_transfer">Bank Transfer</option>
+                              <option value="upi">UPI</option>
+                              <option value="cheque">Cheque</option>
+                            </select>
+                          </div>
+                          <div class="mb-3">
+                            <label for="paymentNotes{{ loop.index }}" class="form-label">Notes</label>
+                            <textarea class="form-control" id="paymentNotes{{ loop.index }}" rows="2"></textarea>
+                          </div>
+                          <div class="text-end">
+                            <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                            <button type="submit" class="btn btn-primary">Save Payment</button>
+                          </div>
+                        </form>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <!-- Vendor JS Files -->
+  <script src="{{ url_for('static', filename='assets/vendor/bootstrap/js/bootstrap.bundle.min.js') }}"></script>
+  <script src="{{ url_for('static', filename='assets/vendor/aos/aos.js') }}"></script>
+  <script src="{{ url_for('static', filename='assets/js/main.js') }}"></script>
+
+  <script>
+    function handlePaymentSubmit(event, tenantId) {
+      event.preventDefault();
+      
+      const formId = event.target.id;
+      const index = formId.replace('addPaymentForm', '');
+      
+      const amount = document.getElementById(`paymentAmount${index}`).value;
+      const date = document.getElementById(`paymentDate${index}`).value;
+      const mode = document.getElementById(`paymentMode${index}`).value;
+      const notes = document.getElementById(`paymentNotes${index}`).value;
+
+      // Make API call to save payment
+      fetch('/add-payment', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          tenant_id: tenantId,
+          amount: amount,
+          payment_date: date,
+          payment_mode: mode,
+          notes: notes
+        })
+      })
+      .then(response => response.json())
+      .then(data => {
+        if (data.success) {
+          // Close the modal
+          const modal = bootstrap.Modal.getInstance(document.getElementById(`addPaymentModal${index}`));
+          modal.hide();
+          
+          // Show success message
+          alert('Payment added successfully!');
+          
+          // Reload the page to show updated amounts
+          window.location.reload();
+        } else {
+          alert('Error adding payment: ' + (data.error || 'Unknown error'));
+        }
+      })
+      .catch(error => {
+        console.error('Error:', error);
+        alert('Error adding payment. Please try again.');
+      });
+    }
+
+    function sendReminder(tenantId) {
+      // TODO: Implement send reminder functionality
+      alert('Send reminder functionality will be implemented');
+    }
+  </script>
+</body>
+</html> 
