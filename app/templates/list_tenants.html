@@ -84,13 +84,14 @@
           </div>
 
           <div class="table-responsive">
-            <table class="table table-hover">
+            <table class="table table-striped">
               <thead>
                 <tr>
                   <th>Name</th>
-                  <th>Phone</th>
                   <th>Property</th>
                   <th>Room</th>
+                  <th>Phone Number</th>
+                  <th>Email</th>
                   <th>Move-in Date</th>
                   <th>Police Verification</th>
                   <th>Actions</th>
@@ -100,9 +101,10 @@
                 {% for tenant in tenants %}
                 <tr data-property-id="{{ tenant.property_id|string }}">
                   <td>{{ tenant.name }}</td>
-                  <td>{{ tenant.phone_number }}</td>
                   <td>{{ tenant.property_name }}</td>
-                  <td>{{ tenant.room_type|replace('_', ' ')|title }} - {{ tenant.room_number }}</td>
+                  <td>{{ tenant.room_number }}</td>
+                  <td>{{ tenant.phone_number }}</td>
+                  <td>{{ tenant.email if tenant.email else '-' }}</td>
                   <td>{{ tenant.move_in_date }}</td>
                   <td>
                     {% if tenant.police_verification %}

@@ -31,7 +31,7 @@ def init_db():
                  (id INTEGER PRIMARY KEY AUTOINCREMENT,
                   username TEXT UNIQUE NOT NULL,
                   password TEXT NOT NULL,
-                  email TEXT UNIQUE NOT NULL)''')
+                  email TEXT NOT NULL)''')
     
     c.execute('''CREATE TABLE IF NOT EXISTS properties
                  (id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -62,6 +62,7 @@ def init_db():
                   property_id INTEGER NOT NULL,
                   room_id INTEGER NOT NULL,
                   phone_number TEXT NOT NULL,
+                  email TEXT,
                   move_in_date DATE NOT NULL,
                   police_verification TEXT,
                   FOREIGN KEY (property_id) REFERENCES properties (id),
@@ -116,7 +117,8 @@ def index():
         
         # Get tenants data with payment information
         tenants = c.execute('''
-            SELECT t.*, p.name as property_name, r.room_number, rc.room_type, rc.rent, rc.electricity_charge, rc.water_charge, rc.security_deposit,
+            SELECT t.id, t.name, t.property_id, t.room_id, t.phone_number, t.email, t.move_in_date, t.police_verification,
+                   p.name as property_name, r.room_number, rc.room_type, rc.rent, rc.electricity_charge, rc.water_charge, rc.security_deposit,
                    COALESCE(SUM(CASE 
                         WHEN strftime('%m', bp.payment_date) = ? AND strftime('%Y', bp.payment_date) = ? 
                         THEN bp.amount 
@@ -163,14 +165,7 @@ def index():
             c.execute('''
                 SELECT 
                     COALESCE(SUM(bp.amount), 0) as paid_amount,
-                    COUNT(DISTINCT t.id) * (
-                        CASE 
-                            WHEN strftime('%Y-%m', t.move_in_date) = ? THEN 
-                                rc.rent + rc.electricity_charge + rc.water_charge + rc.security_deposit
-                            ELSE 
-                                rc.rent + rc.electricity_charge + rc.water_charge
-                        END
-                    ) as expected_total
+                    SUM(rc.rent + rc.electricity_charge + rc.water_charge) as expected_total
                 FROM tenants t
                 JOIN rooms r ON t.room_id = r.id
                 JOIN properties p ON r.property_id = p.id
@@ -179,7 +174,7 @@ def index():
                     AND strftime('%Y', bp.payment_date) = ? 
                     AND strftime('%m', bp.payment_date) = ?
                 WHERE p.user_id = ?
-            ''', (f"{year}-{month:02d}", str(year), f"{month:02d}", session['user_id']))
+            ''', (str(year), f"{month:02d}", session['user_id']))
             
             result = c.fetchone()
             monthly_collections.insert(0, result['paid_amount'] if result else 0)
@@ -191,14 +186,7 @@ def index():
             c.execute('''
                 SELECT 
                     COALESCE(SUM(bp.amount), 0) as collected,
-                    COUNT(DISTINCT t.id) * (
-                        CASE 
-                            WHEN strftime('%Y-%m', t.move_in_date) = strftime('%Y-%m', 'now') THEN 
-                                rc.rent + rc.electricity_charge + rc.water_charge + rc.security_deposit
-                            ELSE 
-                                rc.rent + rc.electricity_charge + rc.water_charge
-                        END
-                    ) as expected
+                    SUM(rc.rent + rc.electricity_charge + rc.water_charge) as expected
                 FROM tenants t
                 JOIN rooms r ON t.room_id = r.id
                 JOIN room_configurations rc ON r.room_config_id = rc.id
@@ -388,6 +376,7 @@ def add_tenant():
         room_id = request.form.get('room')
         tenant_name = request.form.get('tenant_name')
         phone_number = request.form.get('phone_number')
+        email = request.form.get('email')  # Get email from form
         move_in_date = request.form.get('move_in_date')
         police_verification = request.files.get('police_verification')
         
@@ -396,6 +385,7 @@ def add_tenant():
         print("Room ID:", room_id, type(room_id))
         print("Tenant Name:", tenant_name, type(tenant_name))
         print("Phone Number:", phone_number, type(phone_number))
+        print("Email:", email, type(email))
         print("Move-in Date:", move_in_date, type(move_in_date))
         
         # Save police verification file if provided
@@ -423,15 +413,17 @@ def add_tenant():
             int(property_id), # property_id
             int(room_id),     # room_id
             phone_number,     # phone_number
+            email,           # email
             move_in_date,     # move_in_date
             filename         # police_verification
         )
         print("Insert parameters:", params)
         
         c.execute('''INSERT INTO tenants 
-                    (name, property_id, room_id, phone_number, move_in_date, police_verification) 
-                    VALUES (?, ?, ?, ?, ?, ?)''', params)
-        
+                    (name, property_id, room_id, phone_number, email, move_in_date, police_verification) 
+                    VALUES (?, ?, ?, ?, ?, ?, ?)''', params)
+        tenant_id = c.lastrowid
+
         conn.commit()
         conn.close()
         
@@ -515,7 +507,8 @@ def list_tenants():
     
     # Get all tenants with their property and room information
     tenants = c.execute('''
-        SELECT t.*, p.name as property_name,
+        SELECT t.id, t.name, t.property_id, t.room_id, t.phone_number, t.email, t.move_in_date, t.police_verification,
+               p.name as property_name,
                rc.room_type, rc.rent, rc.electricity_charge, rc.water_charge,
                r.room_number
         FROM tenants t
@@ -535,16 +528,17 @@ def list_tenants():
             'property_id': tenant[2],
             'room_id': tenant[3],
             'phone_number': tenant[4],
-            'move_in_date': tenant[5],
-            'police_verification': tenant[6],
-            'property_name': tenant[7],
-            'room_type': tenant[8],
-            'rent': tenant[9],
-            'electricity_charge': tenant[10],
-            'water_charge': tenant[11],
-            'room_number': tenant[12]
+            'email': tenant[5],
+            'move_in_date': tenant[6],
+            'police_verification': tenant[7],
+            'property_name': tenant[8],
+            'room_type': tenant[9],
+            'rent': tenant[10],
+            'electricity_charge': tenant[11],
+            'water_charge': tenant[12],
+            'room_number': tenant[13]
         })
-    print("Shreya Formatted Properties:", formatted_properties)
+    
     print("Shreya Formatted Tenants:", formatted_tenants)
     conn.close()
     return render_template('list_tenants.html', 
@@ -750,6 +744,7 @@ def edit_tenant(tenant_id):
     if request.method == 'POST':
         tenant_name = request.form.get('tenant_name')
         phone_number = request.form.get('phone_number')
+        email = request.form.get('email')  # Get email from form
         move_in_date = request.form.get('move_in_date')
         police_verification = request.files.get('police_verification')
         
@@ -783,9 +778,9 @@ def edit_tenant(tenant_id):
         # Update tenant data
         c.execute('''
             UPDATE tenants 
-            SET name = ?, phone_number = ?, move_in_date = ?, police_verification = ?
+            SET name = ?, phone_number = ?, email = ?, move_in_date = ?, police_verification = ?
             WHERE id = ?
-        ''', (tenant_name, phone_number, move_in_date, filename, tenant_id))
+        ''', (tenant_name, phone_number, email, move_in_date, filename, tenant_id))
         
         conn.commit()
         conn.close()
@@ -797,11 +792,11 @@ def edit_tenant(tenant_id):
     tenant = c.execute('''
         SELECT t.*, p.name as property_name,
                rc.room_type, rc.rent, rc.electricity_charge, rc.water_charge,
-               (SELECT COUNT(*) FROM room_configurations rc2 
-                WHERE rc2.property_id = p.id AND rc2.id <= rc.id) as room_number
+               r.room_number
         FROM tenants t
         JOIN properties p ON t.property_id = p.id
-        JOIN room_configurations rc ON t.room_id = rc.id
+        JOIN rooms r ON t.room_id = r.id
+        JOIN room_configurations rc ON r.room_config_id = rc.id
         WHERE t.id = ? AND p.user_id = ?
     ''', (tenant_id, session['user_id'])).fetchone()
     
@@ -813,17 +808,18 @@ def edit_tenant(tenant_id):
     formatted_tenant = {
         'id': tenant[0],
         'name': tenant[1],
-        'phone_number': tenant[2],
-        'property_id': tenant[3],
-        'room_id': tenant[4],
-        'move_in_date': tenant[5],
-        'police_verification': tenant[6],
-        'property_name': tenant[7],
-        'room_type': tenant[8],
-        'rent': tenant[9],
-        'electricity_charge': tenant[10],
-        'water_charge': tenant[11],
-        'room_number': tenant[12]
+        'property_id': tenant[2],
+        'room_id': tenant[3],
+        'phone_number': tenant[4],
+        'email': tenant[5],
+        'move_in_date': tenant[6],
+        'police_verification': tenant[7],
+        'property_name': tenant[8],
+        'room_type': tenant[9],
+        'rent': tenant[10],
+        'electricity_charge': tenant[11],
+        'water_charge': tenant[12],
+        'room_number': tenant[13]
     }
     
     conn.close()
@@ -1118,12 +1114,20 @@ def all_bills():
                 WHERE tenant_id = t.id 
                 AND strftime('%Y-%m', payment_date) = strftime('%Y-%m', date('now', '-1 month'))
             ), 0) as prev_month_paid,
-            (rc.rent + rc.electricity_charge + rc.water_charge - COALESCE((
-                SELECT SUM(amount) 
-                FROM bill_payments 
-                WHERE tenant_id = t.id 
-                AND strftime('%Y-%m', payment_date) = strftime('%Y-%m', date('now', '-1 month'))
-            ), 0)) as prev_month_pending
+            CASE 
+                WHEN EXISTS (
+                    SELECT 1 
+                    FROM bill_payments 
+                    WHERE tenant_id = t.id 
+                    AND strftime('%Y-%m', payment_date) = strftime('%Y-%m', date('now', '-1 month'))
+                ) THEN (rc.rent + rc.electricity_charge + rc.water_charge - COALESCE((
+                    SELECT SUM(amount) 
+                    FROM bill_payments 
+                    WHERE tenant_id = t.id 
+                    AND strftime('%Y-%m', payment_date) = strftime('%Y-%m', date('now', '-1 month'))
+                ), 0))
+                ELSE 0
+            END as prev_month_pending
         FROM tenants t
         JOIN rooms r ON t.room_id = r.id
         JOIN properties p ON r.property_id = p.id
