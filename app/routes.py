@@ -516,7 +516,7 @@ def list_tenants():
         JOIN rooms r ON t.room_id = r.id
         JOIN room_configurations rc ON r.room_config_id = rc.id
         WHERE p.user_id = ?
-        ORDER BY t.move_in_date DESC
+        ORDER BY r.room_number
     ''', (session['user_id'],)).fetchall()
     
     # Format tenants data
@@ -539,7 +539,6 @@ def list_tenants():
             'room_number': tenant[13]
         })
     
-    print("Shreya Formatted Tenants:", formatted_tenants)
     conn.close()
     return render_template('list_tenants.html', 
                          properties=formatted_properties,
@@ -1107,13 +1106,6 @@ def all_bills():
             END as due_date,
             p.id as property_id,
             (rc.rent + rc.electricity_charge + rc.water_charge) as total_amount,
-            (rc.rent + rc.electricity_charge + rc.water_charge - COALESCE(SUM(bp.amount), 0)) as pending_amount,
-            COALESCE((
-                SELECT SUM(amount) 
-                FROM bill_payments 
-                WHERE tenant_id = t.id 
-                AND strftime('%Y-%m', payment_date) = strftime('%Y-%m', date('now', '-1 month'))
-            ), 0) as prev_month_paid,
             CASE 
                 WHEN EXISTS (
                     SELECT 1 
@@ -1127,7 +1119,23 @@ def all_bills():
                     AND strftime('%Y-%m', payment_date) = strftime('%Y-%m', date('now', '-1 month'))
                 ), 0))
                 ELSE 0
-            END as prev_month_pending
+            END as prev_month_pending,
+            (rc.rent + rc.electricity_charge + rc.water_charge - COALESCE(SUM(bp.amount), 0)) as current_month_pending,
+            ((rc.rent + rc.electricity_charge + rc.water_charge - COALESCE(SUM(bp.amount), 0)) + 
+            CASE 
+                WHEN EXISTS (
+                    SELECT 1 
+                    FROM bill_payments 
+                    WHERE tenant_id = t.id 
+                    AND strftime('%Y-%m', payment_date) = strftime('%Y-%m', date('now', '-1 month'))
+                ) THEN (rc.rent + rc.electricity_charge + rc.water_charge - COALESCE((
+                    SELECT SUM(amount) 
+                    FROM bill_payments 
+                    WHERE tenant_id = t.id 
+                    AND strftime('%Y-%m', payment_date) = strftime('%Y-%m', date('now', '-1 month'))
+                ), 0))
+                ELSE 0
+            END) as total_pending
         FROM tenants t
         JOIN rooms r ON t.room_id = r.id
         JOIN properties p ON r.property_id = p.id
@@ -1136,6 +1144,7 @@ def all_bills():
             AND strftime('%Y-%m', bp.payment_date) = strftime('%Y-%m', 'now')
         WHERE p.user_id = ?
         GROUP BY t.id
+        ORDER BY r.room_number
     ''', (session['user_id'],))
     
     tenants = cursor.fetchall()
@@ -1144,7 +1153,7 @@ def all_bills():
     total_stats = {
         'total': sum(tenant['total_amount'] for tenant in tenants),
         'paid': sum(tenant['paid_amount'] for tenant in tenants),
-        'pending': sum(tenant['pending_amount'] for tenant in tenants)
+        'pending': sum(tenant['total_pending'] for tenant in tenants)
     }
     
     # Get last 6 months for the monthly overview
@@ -1330,8 +1339,15 @@ def add_payment():
     
     print(f"Existing Payments for {month}/{year}: ₹{existing_payments}")
     
+    # Convert amount to float
+    amount = float(amount)
+    
+    # If it's a penalty (notes contain "PENALTY:"), invert the sign
+    if notes and "PENALTY:" in notes.upper():
+        amount = -amount  # Invert the sign
+    
     # Calculate new paid and pending amounts
-    paid_amount = float(existing_payments) + float(amount)
+    paid_amount = float(existing_payments) + amount
     pending_amount = total_amount - paid_amount
     
     print(f"Total Amount: ₹{total_amount}")
@@ -1491,6 +1507,7 @@ def api_monthly_bills(month):
         return jsonify({'error': 'Not logged in'}), 401
     
     property_id = request.args.get('property_id')
+    tenant_id = request.args.get('tenant_id')
     
     conn = get_db()
     cursor = conn.cursor()
@@ -1500,6 +1517,14 @@ def api_monthly_bills(month):
     
     # Base query
     query = '''
+        WITH latest_payments AS (
+            SELECT 
+                tenant_id,
+                id as payment_id,
+                payment_date,
+                ROW_NUMBER() OVER (PARTITION BY tenant_id ORDER BY payment_date DESC) as rn
+            FROM bill_payments
+        )
         SELECT 
             p.name as property_name,
             t.name as tenant_name,
@@ -1515,7 +1540,8 @@ def api_monthly_bills(month):
                 ELSE date(t.move_in_date, 'start of month', '+4 days')
             END as due_date,
             (rc.rent + rc.electricity_charge + rc.water_charge) as total_amount,
-            (rc.rent + rc.electricity_charge + rc.water_charge - COALESCE(SUM(bp.amount), 0)) as pending_amount
+            (rc.rent + rc.electricity_charge + rc.water_charge - COALESCE(SUM(bp.amount), 0)) as pending_amount,
+            lp.payment_id as latest_payment_id
         FROM tenants t
         JOIN rooms r ON t.room_id = r.id
         JOIN properties p ON r.property_id = p.id
@@ -1523,6 +1549,7 @@ def api_monthly_bills(month):
         LEFT JOIN bill_payments bp ON t.id = bp.tenant_id 
             AND strftime('%Y', bp.payment_date) = ? 
             AND strftime('%m', bp.payment_date) = ?
+        LEFT JOIN latest_payments lp ON t.id = lp.tenant_id AND lp.rn = 1
         WHERE p.user_id = ?
         AND strftime('%Y-%m', t.move_in_date) <= ?
     '''
@@ -1533,6 +1560,11 @@ def api_monthly_bills(month):
     if property_id:
         query += ' AND p.id = ?'
         params.append(property_id)
+    
+    # Add tenant filter if specified
+    if tenant_id:
+        query += ' AND t.id = ?'
+        params.append(tenant_id)
     
     query += ' GROUP BY t.id'
     
@@ -1561,3 +1593,130 @@ def api_monthly_bills(month):
         'total_received': total_received,
         'total_pending': total_pending
     })
+
+@app.route('/delete-payment/<int:payment_id>', methods=['POST'])
+def delete_payment(payment_id):
+    if 'user_id' not in session:
+        flash('Please login to access this page', 'warning')
+        return redirect(url_for('login'))
+    
+    conn = get_db()
+    c = conn.cursor()
+    
+    # Get payment details to verify ownership
+    payment = c.execute('''
+        SELECT bp.*, t.id as tenant_id 
+        FROM bill_payments bp
+        JOIN tenants t ON bp.tenant_id = t.id
+        JOIN properties p ON t.property_id = p.id
+        WHERE bp.id = ? AND p.user_id = ?
+    ''', (payment_id, session['user_id'])).fetchone()
+    
+    if payment:
+        # Delete the payment
+        c.execute('DELETE FROM bill_payments WHERE id = ?', (payment_id,))
+        conn.commit()
+        flash('Payment deleted successfully!', 'success')
+    else:
+        flash('Payment not found or unauthorized', 'danger')
+    
+    conn.close()
+    return redirect(url_for('bill_payments', tenant_id=payment['tenant_id']))
+
+@app.route('/send-reminder/<int:payment_id>', methods=['POST'])
+def send_reminder(payment_id):
+    if 'user_id' not in session:
+        flash('Please login to access this page', 'warning')
+        return redirect(url_for('login'))
+    
+    conn = get_db()
+    c = conn.cursor()
+    
+    # Get payment and tenant details
+    payment_data = c.execute('''
+        SELECT bp.*, t.name as tenant_name, t.email, p.name as property_name, r.room_number
+        FROM bill_payments bp
+        JOIN tenants t ON bp.tenant_id = t.id
+        JOIN properties p ON t.property_id = p.id
+        JOIN rooms r ON t.room_id = r.id
+        WHERE bp.id = ? AND p.user_id = ?
+    ''', (payment_id, session['user_id'])).fetchone()
+    
+    if not payment_data:
+        conn.close()
+        flash('Payment not found or unauthorized', 'danger')
+        return redirect(url_for('all_bills'))
+    
+    if not payment_data['email']:
+        conn.close()
+        flash('Tenant email not found', 'warning')
+        return redirect(url_for('all_bills'))
+    
+    try:
+        # Create email message
+        msg = Message(
+            'Payment Reminder - RentEase',
+            recipients=[payment_data['email']],
+            cc=['trnvshisth@gmail.com']
+        )
+        
+        # Format the email body with HTML
+        msg.html = f'''
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <style>
+                body {{ font-family: Arial, sans-serif; line-height: 1.6; color: #000000; }}
+                .container {{ width: 100%; max-width: 600px; margin: 0 auto; border: 1px solid #dddddd; border-collapse: collapse; }}
+                .header {{ background-color: #d32f2f; padding: 10px 0; text-align: center; }}
+                .header img {{ max-width: 150px; height: auto; }}
+                .content {{ padding: 20px; }}
+                .footer {{ padding: 20px; text-align: center; font-size: 12px; color: #555555; }}
+                .button {{ display: inline-block; background-color: #4CAF50; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px; }}
+            </style>
+        </head>
+        <body>
+            <table class="container" cellpadding="0" cellspacing="0" role="presentation">
+                <!-- Header -->
+                
+
+                <!-- Main Content -->
+                <tr>
+                    <td class="content">
+                        <p>Dear {payment_data['tenant_name']},</p>
+
+                        <p>I hope this email finds you well. This is a friendly reminder regarding your pending payment at <strong>{payment_data['property_name']}</strong>, Room <strong>{payment_data['room_number']}</strong>.</p>
+
+                        <div style="margin: 20px 0; padding: 15px; border: 1px solid #eeeeee; border-left: 4px solid #f44336;">
+                            <h3 style="color: #000000; margin-top: 0;">📊 Payment Details:</h3>
+                            <p style="margin-bottom: 5px;"><strong>Pending Amount:</strong> ₹{payment_data['pending_amount']:.2f}</p>
+                            <p style="margin-bottom: 0;">Please ensure timely payment.</p>
+                        </div>
+
+                        <p>Best regards,<br>
+                        RentEase Team</p>
+                    </td>
+                </tr>
+
+                <!-- Footer -->
+                <tr>
+                    <td class="footer">
+                        <p style="color: #000000;">This is a system-generated e-mail. Please do not reply to this e-mail.</p>
+                        <!-- Placeholder for Footer Image Banner -->
+                        <!-- Example: <img src="YOUR_BANNER_IMAGE_URL" alt="Offer Banner" style="display: block; max-width: 100%; height: auto; margin-top: 20px;"> -->
+                    </td>
+                </tr>
+            </table>
+        </body>
+        </html>
+        '''
+        
+        # Send the email
+        mail.send(msg)
+        flash('Reminder sent successfully!', 'success')
+    except Exception as e:
+        print(f"Failed to send email: {str(e)}")
+        flash('Failed to send reminder email', 'danger')
+    
+    conn.close()
+    return redirect(url_for('all_bills'))

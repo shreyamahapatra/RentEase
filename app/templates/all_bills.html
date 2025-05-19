@@ -64,6 +64,17 @@
 
   <main class="main" style="margin-top: 100px;">
     <div class="container mt-5">
+      {% with messages = get_flashed_messages(with_categories=true) %}
+        {% if messages %}
+          {% for category, message in messages %}
+            <div class="alert alert-{{ category }} alert-dismissible fade show" role="alert">
+              {{ message }}
+              <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+            </div>
+          {% endfor %}
+        {% endif %}
+      {% endwith %}
+      
       <div class="row mb-4">
         <div class="col-md-8">
           <h2>All Bills</h2>
@@ -178,7 +189,7 @@
                   <td>₹{{ tenant.water_rate }}</td>
                   <td>₹{{ tenant.total_amount }}</td>
                   <td>{{ tenant.due_date }}</td>
-                  <td class="text-danger fw-bold">₹{{ "%.2f"|format(tenant.pending_amount) }}</td>
+                  <td class="text-danger fw-bold">₹{{ "%.2f"|format(tenant.total_pending) }}</td>
                   <td class="text-success fw-bold">₹{{ "%.2f"|format(tenant.paid_amount) }}</td>
                   <td>
                     <div class="dropdown">
@@ -189,6 +200,11 @@
                         <li>
                           <a class="dropdown-item" href="#" data-bs-toggle="modal" data-bs-target="#addPaymentModal{{ tenant.tenant_id }}">
                             <i class="bi bi-plus-circle me-2"></i>Add Payment
+                          </a>
+                        </li>
+                        <li>
+                          <a class="dropdown-item" href="#" data-bs-toggle="modal" data-bs-target="#addPenaltyModal{{ tenant.tenant_id }}">
+                            <i class="bi bi-exclamation-triangle me-2"></i>Add Penalty
                           </a>
                         </li>
                         <li>
@@ -219,7 +235,7 @@
                           <div class="mb-3">
                             <label for="paymentAmount{{ tenant.tenant_id }}" class="form-label">Payment Amount (₹)</label>
                             <input type="number" class="form-control" id="paymentAmount{{ tenant.tenant_id }}" 
-                                   step="0.01" min="0" max="{{ tenant.total_amount }}" required>
+                                   step="0.01" max="{{ tenant.total_amount + tenant.prev_month_pending }}" required>
                           </div>
                           <div class="mb-3">
                             <label for="paymentDate{{ tenant.tenant_id }}" class="form-label">Payment Date</label>
@@ -242,6 +258,41 @@
                           <div class="text-end">
                             <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
                             <button type="submit" class="btn btn-primary">Save Payment</button>
+                          </div>
+                        </form>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <!-- Add Penalty Modal -->
+                <div class="modal fade" id="addPenaltyModal{{ tenant.tenant_id }}" tabindex="-1">
+                  <div class="modal-dialog">
+                    <div class="modal-content">
+                      <div class="modal-header">
+                        <h5 class="modal-title">Add Penalty for {{ tenant.tenant_name }}</h5>
+                        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                      </div>
+                      <div class="modal-body">
+                        <form id="addPenaltyForm{{ tenant.tenant_id }}" onsubmit="handlePenaltySubmit(event, '{{ tenant.tenant_id }}')">
+                          <div class="mb-3">
+                            <label for="penaltyAmount{{ tenant.tenant_id }}" class="form-label">Penalty Amount (₹)</label>
+                            <input type="number" class="form-control" id="penaltyAmount{{ tenant.tenant_id }}" 
+                                   step="0.01" required>
+                            <div class="form-text">Enter positive amount for additional charges, negative amount for deductions</div>
+                          </div>
+                          <div class="mb-3">
+                            <label for="penaltyDate{{ tenant.tenant_id }}" class="form-label">Penalty Date</label>
+                            <input type="date" class="form-control" id="penaltyDate{{ tenant.tenant_id }}" 
+                                   value="{{ today_date }}" required>
+                          </div>
+                          <div class="mb-3">
+                            <label for="penaltyNotes{{ tenant.tenant_id }}" class="form-label">Reason for Penalty</label>
+                            <textarea class="form-control" id="penaltyNotes{{ tenant.tenant_id }}" rows="2" required></textarea>
+                          </div>
+                          <div class="text-end">
+                            <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                            <button type="submit" class="btn btn-danger">Save Penalty</button>
                           </div>
                         </form>
                       </div>
@@ -590,6 +641,73 @@
         console.error('Error:', error);
         alert('Error adding payment. Please try again.');
       });
+    }
+
+    function handlePenaltySubmit(event, tenantId) {
+      event.preventDefault();
+      
+      const amount = parseFloat(document.getElementById(`penaltyAmount${tenantId}`).value);
+      const date = document.getElementById(`penaltyDate${tenantId}`).value;
+      const notes = document.getElementById(`penaltyNotes${tenantId}`).value;
+
+      fetch('/add-payment', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          tenant_id: tenantId,
+          amount: amount,
+          payment_date: date,
+          payment_mode: 'penalty',
+          notes: `PENALTY: ${notes}`
+        })
+      })
+      .then(response => response.json())
+      .then(data => {
+        if (data.success) {
+          const modal = bootstrap.Modal.getInstance(document.getElementById(`addPenaltyModal${tenantId}`));
+          modal.hide();
+          alert('Penalty added successfully!');
+          window.location.reload();
+        } else {
+          alert('Error adding penalty: ' + (data.error || 'Unknown error'));
+        }
+      })
+      .catch(error => {
+        console.error('Error:', error);
+        alert('Error adding penalty. Please try again.');
+      });
+    }
+
+    function sendReminder(tenantId) {
+      // Get the latest payment for this tenant
+      fetch(`/api/monthly-bills/${new Date().toISOString().slice(0, 7)}?tenant_id=${tenantId}`)
+        .then(response => response.json())
+        .then(data => {
+          console.log('API Response:', data); // Debug log
+          if (!data.tenants || data.tenants.length === 0) {
+            alert('No payment data found for this tenant');
+            return;
+          }
+
+          const tenant = data.tenants[0]; // Since we're filtering by tenant_id, we'll get only one result
+          if (!tenant.latest_payment_id) {
+            alert('No payment records found for this tenant');
+            return;
+          }
+
+          // Create a form and submit it to send the reminder
+          const form = document.createElement('form');
+          form.method = 'POST';
+          form.action = `/send-reminder/${tenant.latest_payment_id}`;
+          document.body.appendChild(form);
+          form.submit();
+        })
+        .catch(error => {
+          console.error('Error:', error);
+          alert('Error sending reminder. Please try again.');
+        });
     }
   </script>
 </body>
