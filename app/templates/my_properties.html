@@ -90,29 +90,46 @@
                 
                 <div class="mt-3">
                   <h6>Room Configurations:</h6>
-                  {% for room in property.rooms %}
+                  {% for room_config in property.room_configurations %}
                   <div class="mb-3 p-3 bg-light rounded">
-                    <h6 class="mb-2">{{ room.room_type|replace('_', ' ')|title }}</h6>
+                    <h6 class="mb-2">{{ room_config.room_type }}</h6>
                     <div class="row">
                       <div class="col-6">
-                        <p class="mb-1"><strong>Rent:</strong> ₹{{ room.rent }}</p>
+                        {% if room_config.room_count is not none %}
+                            <p class="mb-1"><strong>Number of Rooms:</strong> {{ room_config.room_count }}</p>
+                        {% endif %}
+                        <p class="mb-1"><strong>Rent:</strong> ₹{{ room_config.rent }}</p>
                       </div>
                       <div class="col-6">
-                        <p class="mb-1"><strong>Electricity:</strong> ₹{{ room.electricity_charge }}</p>
-                        <p class="mb-1"><strong>Water:</strong> ₹{{ room.water_charge }}</p>
-                        <p class="mb-1"><strong>Security:</strong> ₹{{ room.security_deposit }}</p>
+                        <p class="mb-1"><strong>Electricity:</strong> ₹{{ room_config.electricity_charge }}</p>
+                        <p class="mb-1"><strong>Water:</strong> ₹{{ room_config.water_charge }}</p>
+                        <p class="mb-1"><strong>Security:</strong> ₹{{ room_config.security_deposit }}</p>
                       </div>
                     </div>
                   </div>
                   {% endfor %}
 
-                  <!-- Add Room Button -->
-                  <button type="button" class="btn btn-success btn-sm mb-3" data-bs-toggle="modal" data-bs-target="#addRoomModal{{ property.id }}">
-                    <i class="bi bi-plus-circle"></i> Add Room
-                  </button>
-                  <a href="{{ url_for('view_rooms', property_id=property.id) }}" class="btn btn-info btn-sm mb-3">
-                    <i class="bi bi-eye"></i> View Rooms
-                  </a>
+                  <div class="mt-3">
+                    <!-- Room Management Buttons -->
+                    <div class="mb-2">
+                      <button type="button" class="btn btn-success btn-sm" data-bs-toggle="modal" data-bs-target="#addRoomModal{{ property.id }}">
+                        <i class="bi bi-plus-circle"></i> Add Room
+                      </button>
+                      <a href="{{ url_for('view_rooms', property_id=property.id, source='properties') }}" class="btn btn-primary btn-sm">
+                        <i class="bi bi-eye"></i> View Rooms
+                      </a>
+                    </div>
+                    
+                    <!-- Property Management Buttons -->
+                    <div>
+                      <a href="{{ url_for('edit_property', property_id=property.id) }}" class="btn btn-secondary btn-sm">
+                        <i class="bi bi-pencil"></i> Edit
+                      </a>
+                      <button type="button" class="btn btn-danger btn-sm" data-bs-toggle="modal" data-bs-target="#deletePropertyModal{{ property.id }}">
+                        <i class="bi bi-trash"></i> Delete
+                      </button>
+                    </div>
+                  </div>
 
                   <!-- Add Room Modal -->
                   <div class="modal fade" id="addRoomModal{{ property.id }}" tabindex="-1" aria-labelledby="addRoomModalLabel{{ property.id }}" aria-hidden="true">
@@ -122,20 +139,25 @@
                           <h5 class="modal-title" id="addRoomModalLabel{{ property.id }}">Add New Room</h5>
                           <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
                         </div>
-                        <form action="{{ url_for('add_room', property_id=property.id) }}" method="POST">
+                        <form action="{{ url_for('add_room', property_id=property.id) }}" method="POST" enctype="multipart/form-data">
                           <div class="modal-body">
                             <div class="mb-3">
                               <label for="room_config" class="form-label">Room Configuration</label>
                               <select class="form-select" id="room_config" name="room_config" required>
                                 <option value="">Select Room Configuration</option>
-                                {% for room in property.rooms %}
-                                <option value="{{ room.id }}">{{ room.room_type|replace('_', ' ')|title }} - Rent: ₹{{ room.rent }}, Electricity: ₹{{ room.electricity_charge }}, Water: ₹{{ room.water_charge }}</option>
+                                {% for room_config_option in property.room_configurations %}
+                                <option value="{{ room_config_option.id }}">{{ room_config_option.room_type }} - Rent: ₹{{ room_config_option.rent }}, Electricity: ₹{{ room_config_option.electricity_charge }}, Water: ₹{{ room_config_option.water_charge }}</option>
                                 {% endfor %}
                               </select>
                             </div>
                             <div class="mb-3">
                               <label for="room_number" class="form-label">Room Number</label>
                               <input type="number" class="form-control" id="room_number" name="room_number" required min="1">
+                            </div>
+                            <div class="mb-3">
+                              <label for="room_media" class="form-label">Room Photo/Video</label>
+                              <input type="file" class="form-control" id="room_media" name="room_media" accept="image/*,video/*">
+                              <small class="text-muted">Upload a photo or video of the room (optional)</small>
                             </div>
                           </div>
                           <div class="modal-footer">
@@ -146,19 +168,13 @@
                       </div>
                     </div>
                   </div>
-                </div>
 
-                <div class="mt-3">
-
-                  <a href="{{ url_for('edit_property', property_id=property.id) }}" class="btn btn-primary btn-sm">Edit</a>
-                  <button type="button" class="btn btn-danger btn-sm" data-bs-toggle="modal" data-bs-target="#deleteModal{{ property.id }}">Delete</button>
-                  
                   <!-- Delete Confirmation Modal -->
-                  <div class="modal fade" id="deleteModal{{ property.id }}" tabindex="-1" aria-labelledby="deleteModalLabel{{ property.id }}" aria-hidden="true">
+                  <div class="modal fade" id="deletePropertyModal{{ property.id }}" tabindex="-1" aria-labelledby="deletePropertyModalLabel{{ property.id }}" aria-hidden="true">
                     <div class="modal-dialog">
                       <div class="modal-content">
                         <div class="modal-header">
-                          <h5 class="modal-title" id="deleteModalLabel{{ property.id }}">Confirm Delete</h5>
+                          <h5 class="modal-title" id="deletePropertyModalLabel{{ property.id }}">Confirm Delete</h5>
                           <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
                         </div>
                         <div class="modal-body">

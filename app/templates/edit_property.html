@@ -190,9 +190,84 @@
             <!-- You can add more room types here if needed -->
           </div>
         </div>
-        <button type="submit" class="btn btn-primary">Update Property</button>
-        <a href="{{ url_for('my_properties') }}" class="btn btn-secondary">Cancel</a>
-      </form>
+
+        {# <!-- Add New Custom Room Configuration button --> #}
+        <div id="custom-room-configurations">
+            {% for room_config in room_configs %}
+                {% if room_config.room_type != 'one_room' and room_config.room_type != 'two_room' %}
+                    <div class="card mb-3 custom-room-config-block" data-config-id="{{ room_config.id }}">
+                      <div class="card-body">
+                        <div class="d-flex justify-content-between align-items-center mb-3">
+                          <h6 class="mb-0">Custom Room Configuration: {{ room_config.room_type }}</h6>
+                          <button type="button" class="btn btn-sm btn-danger remove-custom-config">Remove</button>
+                        </div>
+                        <input type="hidden" name="existing_custom_configs[{{ loop.index0 }}][id]" value="{{ room_config.id }}">
+                        <div class="row">
+                          <div class="col-md-4">
+                            <div class="mb-3">
+                              <label for="existing_custom_room_type_{{ loop.index0 }}" class="form-label">Room Type Name</label>
+                              <input type="text" class="form-control" id="existing_custom_room_type_{{ loop.index0 }}" name="existing_custom_configs[{{ loop.index0 }}][room_type]" value="{{ room_config.room_type }}" required>
+                            </div>
+                          </div>
+                          <div class="col-md-4">
+                            <div class="mb-3">
+                              <label for="existing_custom_room_count_{{ loop.index0 }}" class="form-label">Number of Rooms</label>
+                              <input type="number" class="form-control" id="existing_custom_room_count_{{ loop.index0 }}" name="existing_custom_configs[{{ loop.index0 }}][room_count]" min="0" value="{{ room_config.room_count }}" required>
+                            </div>
+                          </div>
+                          <div class="col-md-4">
+                            <div class="mb-3">
+                              <label for="existing_custom_room_rent_{{ loop.index0 }}" class="form-label">Rent per Room</label>
+                              <div class="input-group">
+                                <span class="input-group-text">₹</span>{# Assuming INR #}
+                                <input type="number" class="form-control" id="existing_custom_room_rent_{{ loop.index0 }}" name="existing_custom_configs[{{ loop.index0 }}][rent]" min="0" value="{{ room_config.rent }}" required>
+                              </div>
+                            </div>
+                          </div>
+                          <div class="col-md-4">
+                            <div class="mb-3">
+                              <label for="existing_custom_room_electricity_{{ loop.index0 }}" class="form-label">Electricity Charge</label>
+                              <div class="input-group">
+                                <span class="input-group-text">₹</span>{# Assuming INR #}
+                                <input type="number" class="form-control" id="existing_custom_room_electricity_{{ loop.index0 }}" name="existing_custom_configs[{{ loop.index0 }}][electricity_charge]" min="0" value="{{ room_config.electricity_charge }}" required>
+                              </div>
+                            </div>
+                          </div>
+                          <div class="col-md-4">
+                            <div class="mb-3">
+                              <label for="existing_custom_room_water_{{ loop.index0 }}" class="form-label">Water Charge</label>
+                              <div class="input-group">
+                                <span class="input-group-text">₹</span>{# Assuming INR #}
+                                <input type="number" class="form-control" id="existing_custom_room_water_{{ loop.index0 }}" name="existing_custom_configs[{{ loop.index0 }}][water_charge]" min="0" value="{{ room_config.water_charge }}" required>
+                              </div>
+                            </div>
+                          </div>
+                          <div class="col-md-4">
+                            <div class="mb-3">
+                              <label for="existing_custom_room_security_{{ loop.index0 }}" class="form-label">Security Deposit</label>
+                              <div class="input-group">
+                                <span class="input-group-text">₹</span>{# Assuming INR #}
+                                <input type="number" class="form-control" id="existing_custom_room_security_{{ loop.index0 }}" name="existing_custom_configs[{{ loop.index0 }}][security_deposit]" min="0" value="{{ room_config.security_deposit }}" required>
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                {% endif %}
+            {% endfor %}
+          </div>
+
+          <button type="button" id="add-new-custom-room-btn" class="btn btn-secondary mt-3">Add New Custom Room Configuration</button>
+
+          <hr class="mt-4 mb-4"> {# Optional separator #}
+
+          <div class="text-end">
+            <button type="submit" class="btn btn-primary">Update Property</button>
+            <a href="{{ url_for('my_properties') }}" class="btn btn-secondary">Cancel</a>
+          </div>
+        </form>
+      </div>
     </div>
   </main>
 
@@ -204,5 +279,97 @@
   <script src="{{ url_for('static', filename='assets/vendor/isotope-layout/isotope.pkgd.min.js') }}"></script>
   <script src="{{ url_for('static', filename='assets/vendor/swiper/swiper-bundle.min.js') }}"></script>
   <script src="{{ url_for('static', filename='assets/js/main.js') }}"></script>
+
+  <script>
+    document.addEventListener('DOMContentLoaded', function() {
+        const addNewCustomRoomBtn = document.getElementById('add-new-custom-room-btn');
+        const customConfigsContainer = document.getElementById('custom-room-configurations');
+        let newCustomConfigIndex = 0; // To manage unique names for new inputs
+
+        // Add event listeners for existing remove buttons
+        customConfigsContainer.querySelectorAll('.remove-custom-config').forEach(button => {
+            button.addEventListener('click', function() {
+                // For existing configs, you might want to mark them for deletion
+                // or remove them from the DOM and handle deletion on the backend
+                // A simple approach for now is just removing from DOM
+                this.closest('.custom-room-config-block').remove();
+            });
+        });
+
+
+        addNewCustomRoomBtn.addEventListener('click', function() {
+            const configHtml = `
+              <div class="card mb-3 custom-room-config-block">
+                <div class="card-body">
+                  <div class="d-flex justify-content-between align-items-center mb-3">
+                    <h6 class="mb-0">New Custom Room Configuration</h6>
+                    <button type="button" class="btn btn-sm btn-danger remove-custom-config">Remove</button>
+                  </div>
+                  {# No hidden ID for new configs #}
+                  <div class="row">
+                    <div class="col-md-4">
+                      <div class="mb-3">
+                        <label for="new_custom_room_type_${newCustomConfigIndex}" class="form-label">Room Type Name</label>
+                        <input type="text" class="form-control" id="new_custom_room_type_${newCustomConfigIndex}" name="new_custom_configs[${newCustomConfigIndex}][room_type]" required>
+                      </div>
+                    </div>
+                    <div class="col-md-4">
+                      <div class="mb-3">
+                        <label for="new_custom_room_count_${newCustomConfigIndex}" class="form-label">Number of Rooms</label>
+                        <input type="number" class="form-control" id="new_custom_room_count_${newCustomConfigIndex}" name="new_custom_configs[${newCustomConfigIndex}][room_count]" min="0" value="0" required>
+                      </div>
+                    </div>
+                    <div class="col-md-4">
+                      <div class="mb-3">
+                        <label for="new_custom_room_rent_${newCustomConfigIndex}" class="form-label">Rent per Room</label>
+                        <div class="input-group">
+                          <span class="input-group-text">₹</span>{# Assuming INR #}
+                          <input type="number" class="form-control" id="new_custom_room_rent_${newCustomConfigIndex}" name="new_custom_configs[${newCustomConfigIndex}][rent]" min="0" value="0" required>
+                        </div>
+                      </div>
+                    </div>
+                    <div class="col-md-4">
+                      <div class="mb-3">
+                        <label for="new_custom_room_electricity_${newCustomConfigIndex}" class="form-label">Electricity Charge</label>
+                        <div class="input-group">
+                          <span class="input-group-text">₹</span>{# Assuming INR #}
+                          <input type="number" class="form-control" id="new_custom_room_electricity_${newCustomConfigIndex}" name="new_custom_configs[${newCustomConfigIndex}][electricity_charge]" min="0" value="0" required>
+                        </div>
+                      </div>
+                    </div>
+                    <div class="col-md-4">
+                      <div class="mb-3">
+                        <label for="new_custom_room_water_${newCustomConfigIndex}" class="form-label">Water Charge</label>
+                        <div class="input-group">
+                          <span class="input-group-text">₹</span>{# Assuming INR #}
+                          <input type="number" class="form-control" id="new_custom_room_water_${newCustomConfigIndex}" name="new_custom_configs[${newCustomConfigIndex}][water_charge]" min="0" value="0" required>
+                        </div>
+                      </div>
+                    </div>
+                    <div class="col-md-4">
+                      <div class="mb-3">
+                        <label for="new_custom_room_security_${newCustomConfigIndex}" class="form-label">Security Deposit</label>
+                        <div class="input-group">
+                          <span class="input-group-text">₹</span>{# Assuming INR #}
+                          <input type="number" class="form-control" id="new_custom_room_security_${newCustomConfigIndex}" name="new_custom_configs[${newCustomConfigIndex}][security_deposit]" min="0" value="0" required>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            `;
+            customConfigsContainer.insertAdjacentHTML('beforeend', configHtml);
+
+            // Add event listener to the new remove button
+            customConfigsContainer.lastElementChild.querySelector('.remove-custom-config').addEventListener('click', function() {
+              this.closest('.custom-room-config-block').remove();
+            });
+
+            newCustomConfigIndex++;
+          });
+
+      });
+  </script>
 </body>
 </html> 

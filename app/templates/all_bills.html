@@ -234,8 +234,8 @@
                         <form id="addPaymentForm{{ tenant.tenant_id }}" onsubmit="handlePaymentSubmit(event, '{{ tenant.tenant_id }}')">
                           <div class="mb-3">
                             <label for="paymentAmount{{ tenant.tenant_id }}" class="form-label">Payment Amount (₹)</label>
-                            <input type="number" class="form-control" id="paymentAmount{{ tenant.tenant_id }}" 
-                                   step="0.01" max="{{ tenant.total_amount + tenant.prev_month_pending }}" required>
+                            <input type="number" class="form-control" id="paymentAmount{{ tenant.tenant_id }}"
+                                   step="0.01" required>
                           </div>
                           <div class="mb-3">
                             <label for="paymentDate{{ tenant.tenant_id }}" class="form-label">Payment Date</label>

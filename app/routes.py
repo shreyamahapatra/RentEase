@@ -8,6 +8,7 @@ import time
 from datetime import datetime, timedelta
 import pandas as pd
 import io
+from app.drive_utils import upload_file, get_file_url, find_or_create_folder
 
 def get_db():
     conn = sqlite3.connect('rentease.db')
@@ -54,6 +55,7 @@ def init_db():
                   property_id INTEGER NOT NULL,
                   room_config_id INTEGER NOT NULL,
                   room_number INTEGER NOT NULL,
+                  media_url TEXT,
                   FOREIGN KEY (property_id) REFERENCES properties (id),
                   FOREIGN KEY (room_config_id) REFERENCES room_configurations (id))''')
     c.execute('''CREATE TABLE IF NOT EXISTS tenants
@@ -87,6 +89,14 @@ def init_db():
     # Add phone_number column if it doesn't exist
     if 'phone_number' not in columns:
         c.execute('ALTER TABLE tenants ADD COLUMN phone_number TEXT')
+    
+    # Check if media_url column exists in rooms table
+    c.execute("PRAGMA table_info(rooms)")
+    columns = [column[1] for column in c.fetchall()]
+    
+    # Add media_url column if it doesn't exist
+    if 'media_url' not in columns:
+        c.execute('ALTER TABLE rooms ADD COLUMN media_url TEXT')
     
     conn.commit()
     conn.close()
@@ -189,6 +199,7 @@ def index():
                     SUM(rc.rent + rc.electricity_charge + rc.water_charge) as expected
                 FROM tenants t
                 JOIN rooms r ON t.room_id = r.id
+                JOIN properties p ON r.property_id = p.id
                 JOIN room_configurations rc ON r.room_config_id = rc.id
                 LEFT JOIN bill_payments bp ON t.id = bp.tenant_id 
                     AND strftime('%Y-%m', bp.payment_date) = strftime('%Y-%m', 'now')
@@ -331,35 +342,70 @@ def add_property():
     if 'user_id' not in session:
         flash('Please login to access this page', 'warning')
         return redirect(url_for('login'))
-    
+
     if request.method == 'POST':
         name = request.form.get('name')
         address = request.form.get('address')
         user_id = session['user_id']
-        
+
         conn = get_db()
         c = conn.cursor()
         c.execute('INSERT INTO properties (name, address, user_id) VALUES (?, ?, ?)',
                  (name, address, user_id))
         property_id = c.lastrowid
-        
-        # Save room configurations
-        room_types = ['one_room', 'two_room']
-        for room_type in room_types:
+
+        # Save default room configurations (1 Room Set and 2 Room Set)
+        default_room_types = ['one_room', 'two_room']
+        for room_type in default_room_types:
             room_count = request.form.get(f'{room_type}_count')
             rent = request.form.get(f'{room_type}_rent')
             electricity_charge = request.form.get(f'{room_type}_electricity')
             water_charge = request.form.get(f'{room_type}_water')
             security_deposit = request.form.get(f'{room_type}_security')
-            
-            c.execute('''INSERT INTO room_configurations 
-                         (property_id, room_type, room_count, rent, electricity_charge, water_charge, security_deposit) 
-                         VALUES (?, ?, ?, ?, ?, ?, ?)''',
-                     (property_id, room_type, room_count, rent, electricity_charge, water_charge, security_deposit))
-        
+
+            # Only insert if count, rent, etc. are provided (meaning the section was used)
+            if room_count or rent or electricity_charge or water_charge or security_deposit:
+                c.execute('''INSERT INTO room_configurations
+                             (property_id, room_type, room_count, rent, electricity_charge, water_charge, security_deposit)
+                             VALUES (?, ?, ?, ?, ?, ?, ?)''',
+                         (property_id, room_type, room_count or 0, rent or 0, electricity_charge or 0, water_charge or 0, security_deposit or 0))
+
+
+        # Save custom room configurations
+        # Flask's request.form treats list of dicts with indexed names like a multidict.
+        # We need to manually group them.
+        custom_configs_data = {}
+        for key, value in request.form.items():
+            if key.startswith('custom_configs['):
+                # Extract index and field name: e.g., custom_configs[0][room_type]
+                parts = key.split('[')
+                index = int(parts[1].split(']')[0])
+                field = parts[2].split(']')[0]
+
+                if index not in custom_configs_data:
+                    custom_configs_data[index] = {}
+                custom_configs_data[index][field] = value
+
+        # Sort by index to process in order
+        for index in sorted(custom_configs_data.keys()):
+            config = custom_configs_data[index]
+            room_type = config.get('room_type')
+            room_count = config.get('room_count')
+            rent = config.get('rent')
+            electricity_charge = config.get('electricity_charge')
+            water_charge = config.get('water_charge')
+            security_deposit = config.get('security_deposit')
+
+            # Ensure minimum data is present for a custom config
+            if room_type and (room_count or rent or electricity_charge or water_charge or security_deposit):
+                 c.execute('''INSERT INTO room_configurations
+                             (property_id, room_type, room_count, rent, electricity_charge, water_charge, security_deposit)
+                             VALUES (?, ?, ?, ?, ?, ?, ?)''',
+                         (property_id, room_type, room_count or 0, rent or 0, electricity_charge or 0, water_charge or 0, security_deposit or 0))
+
         conn.commit()
         conn.close()
-        
+
         flash('Property and room configurations added successfully!', 'success')
         return redirect(url_for('my_properties'))
     return render_template('add_property.html')
@@ -388,12 +434,59 @@ def add_tenant():
         print("Email:", email, type(email))
         print("Move-in Date:", move_in_date, type(move_in_date))
         
-        # Save police verification file if provided
-        filename = None
+        # Save police verification file to Google Drive if provided
+        drive_file_data = None
         if police_verification:
-            filename = f"police_verification_{property_id}_{room_id}_{int(time.time())}.pdf"
-            police_verification.save(os.path.join('app/static/uploads', filename))
-        
+            # --- Google Drive Upload --- START
+            conn = get_db()
+            c = conn.cursor()
+            # Get property name and room number
+            property_data = c.execute('SELECT name FROM properties WHERE id = ?', (property_id,)).fetchone()
+            property_name = property_data['name'] if property_data else 'Unknown Property'
+            
+            room_data = c.execute('SELECT room_number FROM rooms WHERE id = ?', (room_id,)).fetchone()
+            room_number = room_data['room_number'] if room_data else 'Unknown Room'
+            
+            conn.close()
+
+            # Find or create property folder
+            folder_id = find_or_create_folder(property_name)
+
+            if folder_id:
+                # Save file temporarily
+                temp_filename = f"temp_police_verification_{property_id}_{room_id}_{int(time.time())}.pdf"
+                temp_path = os.path.join('app/static/uploads', temp_filename)
+                police_verification.save(temp_path)
+
+                try:
+                    # Upload to Google Drive into the property folder
+                    drive_file_id = upload_file(
+                        temp_path,
+                        f"police_verification_{tenant_name}_Room{room_number}.pdf", # Include room number
+                        'application/pdf',
+                        folder_id=folder_id
+                    )
+
+                    # Get the web view URL
+                    drive_file_url = get_file_url(drive_file_id)
+
+                    # Store both the file ID and URL in the database
+                    drive_file_data = f"{drive_file_id}|{drive_file_url}"
+                except Exception as e:
+                    print(f"Error uploading to Google Drive: {str(e)}")
+                    flash('Error uploading police verification document', 'danger')
+                    drive_file_data = None # Ensure it's None on failure
+                finally:
+                    # Clean up temporary file
+                    try:
+                        os.remove(temp_path)
+                    except:
+                        pass # Ignore errors if file doesn't exist
+            else:
+                flash('Could not create or find Google Drive folder for the property.', 'danger')
+                drive_file_data = None # Ensure it's None on failure
+            # --- Google Drive Upload --- END
+
         conn = get_db()
         c = conn.cursor()
         
@@ -415,7 +508,7 @@ def add_tenant():
             phone_number,     # phone_number
             email,           # email
             move_in_date,     # move_in_date
-            filename         # police_verification
+            drive_file_data  # police_verification (now contains both ID and URL)
         )
         print("Insert parameters:", params)
         
@@ -423,7 +516,7 @@ def add_tenant():
                     (name, property_id, room_id, phone_number, email, move_in_date, police_verification) 
                     VALUES (?, ?, ?, ?, ?, ?, ?)''', params)
         tenant_id = c.lastrowid
-
+        
         conn.commit()
         conn.close()
         
@@ -522,6 +615,14 @@ def list_tenants():
     # Format tenants data
     formatted_tenants = []
     for tenant in tenants:
+        # Parse police verification data to get the URL
+        police_verification_url = None
+        if tenant[7]:  # police_verification field
+            try:
+                _, police_verification_url = tenant[7].split('|')
+            except:
+                pass
+
         formatted_tenants.append({
             'id': tenant[0],
             'name': tenant[1],
@@ -530,7 +631,7 @@ def list_tenants():
             'phone_number': tenant[4],
             'email': tenant[5],
             'move_in_date': tenant[6],
-            'police_verification': tenant[7],
+            'police_verification': police_verification_url,  # Use the parsed URL
             'property_name': tenant[8],
             'room_type': tenant[9],
             'rent': tenant[10],
@@ -553,7 +654,7 @@ def delete_tenant(tenant_id):
     conn = get_db()
     c = conn.cursor()
     
-    # Get tenant's police verification file
+    # Get tenant's police verification file data
     tenant = c.execute('''
         SELECT t.police_verification 
         FROM tenants t
@@ -562,12 +663,14 @@ def delete_tenant(tenant_id):
     ''', (tenant_id, session['user_id'])).fetchone()
     
     if tenant:
-        # Delete the file if it exists
+        # Delete the file from Google Drive if it exists
         if tenant[0]:
             try:
-                os.remove(os.path.join('app/static/uploads', tenant[0]))
+                drive_file_id, _ = tenant[0].split('|')
+                # TODO: Implement file deletion from Google Drive
+                # For now, we'll just delete the database record
             except:
-                pass  # Ignore if file doesn't exist
+                pass  # Ignore if file data is invalid
         
         # Delete the tenant record
         c.execute('DELETE FROM tenants WHERE id = ?', (tenant_id,))
@@ -588,126 +691,240 @@ def my_properties():
     if 'user_id' not in session:
         flash('Please login to access this page', 'warning')
         return redirect(url_for('login'))
-    
+
     conn = get_db()
     c = conn.cursor()
-    
-    # Get all properties for the logged-in user with their room configurations
-    properties = c.execute('''
-        SELECT p.id, p.name, p.address, 
-               rc.id as room_config_id, rc.room_type, rc.room_count, 
+
+    # Get all properties for the logged-in user with all their room configurations
+    properties_data = c.execute('''
+        SELECT p.id, p.name, p.address,
+               rc.id as room_config_id, rc.room_type, rc.room_count,
                rc.rent, rc.electricity_charge, rc.water_charge, rc.security_deposit
         FROM properties p
         LEFT JOIN room_configurations rc ON p.id = rc.property_id
         WHERE p.user_id = ?
+        ORDER BY p.id, rc.room_type -- Order by property and then room type
     ''', (session['user_id'],)).fetchall()
-    
-    # Format the properties data
+
+    # Format the properties data to group configurations by property
     formatted_properties = []
     current_property = None
-    
-    for row in properties:
-        if current_property is None or current_property['id'] != row[0]:
+
+    for row in properties_data:
+        if current_property is None or current_property['id'] != row['id']:
             if current_property is not None:
                 formatted_properties.append(current_property)
-            
+
             current_property = {
-                'id': row[0],
-                'name': row[1],
-                'address': row[2],
-                'rooms': []
+                'id': row['id'],
+                'name': row['name'],
+                'address': row['address'],
+                'room_configurations': [] # Renamed key to be more accurate
             }
-        
-        if row[3]:  # if room_config_id exists
-            current_property['rooms'].append({
-                'id': row[3],
-                'room_type': row[4],
-                'room_count': row[5],
-                'rent': row[6],
-                'electricity_charge': row[7],
-                'water_charge': row[8],
-                'security_deposit': row[9]
+
+        # Add room configuration if it exists for this property
+        if row['room_config_id']: # Check if rc.id is not NULL
+             current_property['room_configurations'].append({
+                'id': row['room_config_id'],
+                'room_type': row['room_type'],
+                'room_count': row['room_count'],
+                'rent': row['rent'],
+                'electricity_charge': row['electricity_charge'],
+                'water_charge': row['water_charge'],
+                'security_deposit': row['security_deposit']
             })
-    
+
+    # Append the last property if it exists
     if current_property is not None:
         formatted_properties.append(current_property)
 
-    print("Shreya Formatted Properties:", formatted_properties)    
     conn.close()
-    return render_template('my_properties.html', properties=formatted_properties)
+    return render_template('my_properties.html',
+                         properties=formatted_properties)
 
 @app.route('/edit-property/<int:property_id>', methods=['GET', 'POST'])
 def edit_property(property_id):
     if 'user_id' not in session:
         flash('Please login to access this page', 'warning')
         return redirect(url_for('login'))
-    
+
     conn = get_db()
     c = conn.cursor()
-    
+
+    # Get property and room configuration data for GET request and validation
+    property_data = c.execute('''
+        SELECT * FROM properties
+        WHERE id = ? AND user_id = ?
+    ''', (property_id, session['user_id'])).fetchone()
+
+    if not property_data:
+        conn.close()
+        flash('Property not found', 'danger')
+        return redirect(url_for('my_properties'))
+
     if request.method == 'POST':
         # Update property information
         name = request.form.get('name')
         address = request.form.get('address')
-        
-        c.execute('''UPDATE properties 
-                    SET name = ?, address = ? 
+
+        c.execute('''UPDATE properties
+                    SET name = ?, address = ?
                     WHERE id = ? AND user_id = ?''',
                  (name, address, property_id, session['user_id']))
-        
-        # Update room configurations
-        room_types = ['one_room', 'two_room']
-        for room_type in room_types:
+
+        # --- Handle Room Configurations ---
+
+        # 1. Update default room configurations (one_room and two_room)
+        default_room_types = ['one_room', 'two_room']
+        for room_type in default_room_types:
             room_count = request.form.get(f'{room_type}_count')
             rent = request.form.get(f'{room_type}_rent')
             electricity_charge = request.form.get(f'{room_type}_electricity')
             water_charge = request.form.get(f'{room_type}_water')
             security_deposit = request.form.get(f'{room_type}_security')
-            
-            # Update existing room configuration
-            c.execute('''UPDATE room_configurations 
-                        SET room_count = ?, rent = ?, electricity_charge = ?, 
-                            water_charge = ?, security_deposit = ?
-                        WHERE property_id = ? AND room_type = ?''',
-                     (room_count, rent, electricity_charge, water_charge, 
-                      security_deposit, property_id, room_type))
-        
+
+            # Find the existing configuration for this type and property
+            existing_config_id = c.execute('''
+                SELECT id FROM room_configurations
+                WHERE property_id = ? AND room_type = ?
+            ''', (property_id, room_type)).fetchone()
+
+            if existing_config_id:
+                # Update existing configuration
+                c.execute('''UPDATE room_configurations
+                            SET room_count = ?, rent = ?, electricity_charge = ?,
+                                water_charge = ?, security_deposit = ?
+                            WHERE id = ?''',
+                         (room_count or 0, rent or 0, electricity_charge or 0, water_charge or 0,
+                          security_deposit or 0, existing_config_id[0]))
+            else:
+                 # Insert as a new configuration if it doesn't exist (shouldn't happen with current template logic but as a safeguard)
+                if room_count or rent or electricity_charge or water_charge or security_deposit:
+                     c.execute('''INSERT INTO room_configurations
+                                 (property_id, room_type, room_count, rent, electricity_charge, water_charge, security_deposit)
+                                 VALUES (?, ?, ?, ?, ?, ?, ?)''',
+                             (property_id, room_type, room_count or 0, rent or 0, electricity_charge or 0, water_charge or 0, security_deposit or 0))
+
+
+        # 2. Handle existing and new custom configurations
+        submitted_existing_ids = []
+        custom_configs_data = {}
+
+        # Group submitted custom configuration data (existing and new)
+        print("--- Start of Request Form Items ---")
+        for key, value in request.form.items():
+            print(f"Key: {key}, Value: {value}")
+        print("--- End of Request Form Items ---")
+
+        custom_configs_data = {}
+
+        # Group submitted custom configuration data (existing and new)
+        for key, value in request.form.items():
+            if key.startswith('existing_custom_configs[') or key.startswith('new_custom_configs['):
+                parts = key.split('[')
+                index = int(parts[1].split(']')[0])
+                field = parts[2].split(']')[0]
+                config_type = parts[0] # 'existing_custom_configs' or 'new_custom_configs'
+
+                if index not in custom_configs_data:
+                    custom_configs_data[index] = {'_type': config_type}
+                custom_configs_data[index][field] = value
+
+        print("--- Start of Custom Configs Data ---")
+        print(custom_configs_data)
+        print("--- End of Custom Configs Data ---")
+        # Process grouped custom configurations
+        for index in sorted(custom_configs_data.keys()):
+            config = custom_configs_data[index]
+            config_type = config['_type']
+            room_type = config.get('room_type')
+            room_count = config.get('room_count')
+            rent = config.get('rent')
+            electricity_charge = config.get('electricity_charge')
+            water_charge = config.get('water_charge')
+            security_deposit = config.get('security_deposit')
+
+            if room_type and (room_count or rent or electricity_charge or water_charge or security_deposit):
+                if config_type == 'existing_custom_configs':
+                    config_id = config.get('id')
+                    if config_id:
+                         # Update existing custom configuration
+                        c.execute('''UPDATE room_configurations
+                                    SET room_type = ?, room_count = ?, rent = ?, electricity_charge = ?,
+                                        water_charge = ?, security_deposit = ?
+                                    WHERE id = ? AND property_id = ?''', # Add property_id check for safety
+                                 (room_type, room_count or 0, rent or 0, electricity_charge or 0, water_charge or 0,
+                                  security_deposit or 0, config_id, property_id))
+                        submitted_existing_ids.append(int(config_id)) # Keep track of submitted existing IDs
+                elif config_type == 'new_custom_configs':
+                     print("--- Inserting New Custom Configuration ---")
+                     print(f"Property ID: {property_id}, Room Type: {room_type}, Room Count: {room_count}, Rent: {rent}, Electricity Charge: {electricity_charge}, Water Charge: {water_charge}, Security Deposit: {security_deposit}")
+                    # Insert new custom configuration
+                     c.execute('''INSERT INTO room_configurations
+                                 (property_id, room_type, room_count, rent, electricity_charge, water_charge, security_deposit)
+                                 VALUES (?, ?, ?, ?, ?, ?, ?)''',
+                             (property_id, room_type, room_count or 0, rent or 0, electricity_charge or 0, water_charge or 0, security_deposit or 0))
+
+        # # 3. Delete custom configurations that were removed on the form
+        # # Get current custom config IDs from the database (excluding default types)
+        # current_custom_configs_db = c.execute('''
+        #     SELECT id FROM room_configurations
+        #     WHERE property_id = ? AND room_type NOT IN (?, ?)
+        # ''', (property_id, 'one_room', 'two_room')).fetchall()
+
+        # # current_custom_ids_db = [config['id'] for config in current_custom_configs_db]
+
+        # # Find IDs in DB that were NOT submitted in the form
+        # ids_to_delete = [id for id in current_custom_ids_db if id not in submitted_existing_ids]
+
+        # # if ids_to_delete:
+        #     # Delete the configurations
+        #     # Use a dynamic number of placeholders for the IN clause
+        #     # placeholders = ','.join('?' for _ in ids_to_delete)
+        #     # c.execute(f'''DELETE FROM room_configurations
+        #     #             WHERE id IN ({placeholders}) AND property_id = ?''',
+        #     #           ids_to_delete + [property_id]) # Add property_id for safety
+
         conn.commit()
-        flash('Property updated successfully!', 'success')
-        return redirect(url_for('my_properties'))
-    
-    # Get property and room configuration data
-    property_data = c.execute('''
-        SELECT * FROM properties 
-        WHERE id = ? AND user_id = ?
-    ''', (property_id, session['user_id'])).fetchone()
-    
-    if not property_data:
         conn.close()
-        flash('Property not found', 'danger')
+
+        flash('Property and room configurations updated successfully!', 'success')
         return redirect(url_for('my_properties'))
-    
+
+    # GET request part: Fetch property data and all room configurations
+    # This part remains largely the same as before, ensuring all configs are fetched
+    # The template logic handles separating default and custom ones for display
     room_configs = c.execute('''
-        SELECT * FROM room_configurations 
+        SELECT id, room_type, room_count, rent, electricity_charge, water_charge, security_deposit
+        FROM room_configurations
         WHERE property_id = ?
     ''', (property_id,)).fetchall()
-    
-    # Format room configurations into a dictionary
+
+    # Format room configurations into a dictionary for easy access by type in template
+    # And also keep a list for iterating over all configs
     room_data = {}
+    all_room_configs_list = [] # Use a list to pass all configurations
+
     for room in room_configs:
-        room_data[room[2]] = {  # room[2] is room_type
-            'room_count': room[3],
-            'rent': room[4],
-            'electricity_charge': room[5],
-            'water_charge': room[6],
-            'security_deposit': room[7]
-        }
-    
+        # Use room_type as key for default configs for easy lookup
+        if room['room_type'] in ['one_room', 'two_room']:
+             room_data[room['room_type']] = {
+                'id': room['id'], # Include ID for updates
+                'room_count': room['room_count'],
+                'rent': room['rent'],
+                'electricity_charge': room['electricity_charge'],
+                'water_charge': room['water_charge'],
+                'security_deposit': room['security_deposit']
+             }
+        # Add all configurations to the list
+        all_room_configs_list.append(dict(room)) # Convert Row to dict for consistency
+
+
     conn.close()
-    print("Property Data:", property_data)
-    return render_template('edit_property.html', 
+    return render_template('edit_property.html',
                          property=property_data,
-                         room_data=room_data)
+                         room_data=room_data, # For default configs
+                         room_configs=all_room_configs_list) # For iterating through all in template
 
 @app.route('/delete-property/<int:property_id>', methods=['POST'])
 def delete_property(property_id):
@@ -747,49 +964,82 @@ def edit_tenant(tenant_id):
         move_in_date = request.form.get('move_in_date')
         police_verification = request.files.get('police_verification')
         
-        # Get current tenant data
+        # Get current tenant data, including property name and room number
         current_tenant = c.execute('''
-            SELECT t.*, p.user_id 
+            SELECT t.*, p.user_id, p.name as property_name, r.room_number
             FROM tenants t
             JOIN properties p ON t.property_id = p.id
+            JOIN rooms r ON t.room_id = r.id
             WHERE t.id = ?
         ''', (tenant_id,)).fetchone()
         
-        if not current_tenant or current_tenant[6] != session['user_id']:
+        if not current_tenant or current_tenant['user_id'] != session['user_id']: # Use dict access
             conn.close()
             flash('Tenant not found', 'danger')
             return redirect(url_for('list_tenants'))
         
         # Handle police verification file
-        filename = current_tenant[5]  # Keep existing filename by default
+        drive_file_data = current_tenant['police_verification']  # Keep existing file data by default
         if police_verification:
-            # Delete old file if exists
-            if filename:
+            # --- Google Drive Upload --- START
+            property_name = current_tenant['property_name'] # Get property name
+            room_number = current_tenant['room_number'] # Get room number
+
+            # Find or create property folder
+            folder_id = find_or_create_folder(property_name)
+
+            if folder_id:
+                # Save file temporarily
+                temp_filename = f"temp_police_verification_{current_tenant['property_id']}_{current_tenant['room_id']}_{int(time.time())}.pdf"
+                temp_path = os.path.join('app/static/uploads', temp_filename)
+                police_verification.save(temp_path)
+
                 try:
-                    os.remove(os.path.join('app/static/uploads', filename))
-                except:
-                    pass
-            
-            # Save new file
-            filename = f"police_verification_{current_tenant[2]}_{current_tenant[3]}_{int(time.time())}.pdf"
-            police_verification.save(os.path.join('app/static/uploads', filename))
-        
+                    # Upload to Google Drive into the property folder
+                    drive_file_id = upload_file(
+                        temp_path,
+                        f"police_verification_{tenant_name}_Room{room_number}.pdf", # Include room number
+                        'application/pdf',
+                        folder_id=folder_id
+                    )
+
+                    # Get the web view URL
+                    drive_file_url = get_file_url(drive_file_id)
+
+                    # Store both the file ID and URL in the database
+                    drive_file_data = f"{drive_file_id}|{drive_file_url}"
+                except Exception as e:
+                    print(f"Error uploading to Google Drive: {str(e)}")
+                    flash('Error uploading police verification document', 'danger')
+                    drive_file_data = current_tenant['police_verification'] # Keep existing on failure
+                finally:
+                    # Clean up temporary file
+                    try:
+                        os.remove(temp_path)
+                    except: # Handle cases where the temp file might not exist for some reason
+                        pass
+            else:
+                flash('Could not create or find Google Drive folder for the property.', 'danger')
+                drive_file_data = current_tenant['police_verification'] # Keep existing on failure
+            # --- Google Drive Upload --- END
+
         # Update tenant data
         c.execute('''
-            UPDATE tenants 
+            UPDATE tenants
             SET name = ?, phone_number = ?, email = ?, move_in_date = ?, police_verification = ?
             WHERE id = ?
-        ''', (tenant_name, phone_number, email, move_in_date, filename, tenant_id))
-        
+        ''', (tenant_name, phone_number, email, move_in_date, drive_file_data, tenant_id))
+
         conn.commit()
         conn.close()
-        
+
         flash('Tenant updated successfully!', 'success')
         return redirect(url_for('list_tenants'))
     
     # Get tenant data for editing
     tenant = c.execute('''
-        SELECT t.*, p.name as property_name,
+        SELECT t.id, t.name, t.property_id, t.room_id, t.phone_number, t.email, t.move_in_date, t.police_verification,
+               p.name as property_name,
                rc.room_type, rc.rent, rc.electricity_charge, rc.water_charge,
                r.room_number
         FROM tenants t
@@ -804,15 +1054,23 @@ def edit_tenant(tenant_id):
         flash('Tenant not found', 'danger')
         return redirect(url_for('list_tenants'))
     
+    # Parse the police verification data
+    police_verification_url = None
+    if tenant[7]:  # police_verification field
+        try:
+            _, police_verification_url = tenant[7].split('|')
+        except:
+            pass
+    
     formatted_tenant = {
         'id': tenant[0],
         'name': tenant[1],
         'property_id': tenant[2],
         'room_id': tenant[3],
         'phone_number': tenant[4],
-        'email': tenant[5],
+        'email': tenant[5],  # Add email field
         'move_in_date': tenant[6],
-        'police_verification': tenant[7],
+        'police_verification': police_verification_url,
         'property_name': tenant[8],
         'room_type': tenant[9],
         'rent': tenant[10],
@@ -830,6 +1088,12 @@ def add_room(property_id):
         flash('Please login to access this page', 'warning')
         return redirect(url_for('login'))
     
+    # Debug logging
+    print("\n=== ADD ROOM ROUTE CALLED ===")
+    print("Request Method:", request.method)
+    print("Request Files:", request.files)
+    print("Request Form:", request.form)
+    
     # Verify property ownership
     conn = get_db()
     c = conn.cursor()
@@ -844,17 +1108,21 @@ def add_room(property_id):
     # Get form data
     room_config_id = request.form.get('room_config')
     room_number = request.form.get('room_number')
-
-    print("Tarun Room Config ID:", room_config_id)
-    print("Tarun Room Number:", room_number)
+    room_media = request.files.get('room_media')
+    print("Room Media File:", room_media)
+    print("Room Media Filename:", room_media.filename if room_media else None)
+    print("Room Config ID:", room_config_id)
+    print("Room Number:", room_number)
     
     # Get room configuration details
     room_config = c.execute('''
         SELECT room_count FROM room_configurations 
         WHERE id = ? AND property_id = ?
     ''', (room_config_id, property_id)).fetchone()
+    print("Room Config Query Result:", room_config)
     
     if not room_config:
+        print("Room configuration not found")
         conn.close()
         flash('Room configuration not found', 'danger')
         return redirect(url_for('my_properties'))
@@ -864,8 +1132,10 @@ def add_room(property_id):
         SELECT id FROM rooms 
         WHERE property_id = ? AND room_number = ?
     ''', (property_id, room_number)).fetchone()
+    print("Existing Room Check Result:", existing_room)
     
     if existing_room:
+        print("Room number already exists")
         conn.close()
         flash('Room number already exists for this property', 'danger')
         return redirect(url_for('my_properties'))
@@ -875,22 +1145,108 @@ def add_room(property_id):
         SELECT COUNT(*) FROM rooms 
         WHERE property_id = ? AND room_config_id = ?
     ''', (property_id, room_config_id)).fetchone()[0]
+    print("Current Rooms Count:", current_rooms)
+    print("Room Config Count Limit:", room_config[0])
     
     if current_rooms >= room_config[0]:
+        print("Maximum rooms reached for configuration")
         conn.close()
         flash('Maximum number of rooms reached for this configuration', 'danger')
         return redirect(url_for('my_properties'))
     
+    print("All validation checks passed, proceeding with room creation")
+    
+    # Handle room media upload if provided
+    media_url = None
+    if room_media and room_media.filename:  # Check if file was actually uploaded
+        try:
+            print("Starting media upload process...")
+            # Create the folder structure in Google Drive
+            try:
+                inventory_folder = find_or_create_folder('inventory')
+                print("Inventory folder created/found:", inventory_folder)
+            except Exception as e:
+                print("Error creating inventory folder:", str(e))
+                raise
+            
+            try:
+                videos_folder = find_or_create_folder('videos', parent_folder_id=inventory_folder)
+                print("Videos folder created/found:", videos_folder)
+            except Exception as e:
+                print("Error creating videos folder:", str(e))
+                raise
+            
+            try:
+                building_folder = find_or_create_folder(property[1], parent_folder_id=videos_folder)
+                print("Building folder created/found:", building_folder)
+            except Exception as e:
+                print("Error creating building folder:", str(e))
+                raise
+            
+            # Save file temporarily
+            temp_filename = f"temp_room_media_{property_id}_{room_number}_{int(time.time())}"
+            temp_path = os.path.join('app/static/uploads', temp_filename)
+            print("Saving file to temp path:", temp_path)
+            try:
+                room_media.save(temp_path)
+                print("File saved successfully to temp path")
+            except Exception as e:
+                print("Error saving file to temp path:", str(e))
+                raise
+            
+            # Determine file extension and mime type
+            file_ext = os.path.splitext(room_media.filename)[1].lower()
+            mime_type = 'video/mp4' if file_ext == '.mp4' else 'image/jpeg'
+            print("File extension:", file_ext)
+            print("MIME type:", mime_type)
+            
+            # Upload to Google Drive
+            try:
+                drive_file_id = upload_file(
+                    temp_path,
+                    f"room_{room_number}{file_ext}",
+                    mime_type,
+                    folder_id=building_folder
+                )
+                print("File uploaded to Drive with ID:", drive_file_id)
+            except Exception as e:
+                print("Error uploading file to Drive:", str(e))
+                raise
+            
+            # Get the web view URL
+            try:
+                media_url = get_file_url(drive_file_id)
+                print("Media URL:", media_url)
+            except Exception as e:
+                print("Error getting file URL:", str(e))
+                raise
+            
+            # Clean up temporary file
+            try:
+                os.remove(temp_path)
+                print("Temporary file cleaned up")
+            except Exception as e:
+                print("Error cleaning up temp file:", str(e))
+                # Don't raise here, as the file is already uploaded
+                
+        except Exception as e:
+            print("Error in media upload process:", str(e))
+            flash('Error uploading room media: ' + str(e), 'warning')
+            # Clean up temp file if it exists
+            try:
+                if os.path.exists(temp_path):
+                    os.remove(temp_path)
+            except:
+                pass
+    
     # Insert new room
     c.execute('''INSERT INTO rooms 
-                 (property_id, room_config_id, room_number) 
-                 VALUES (?, ?, ?)''',
-             (property_id, room_config_id, room_number))
+                 (property_id, room_config_id, room_number, media_url) 
+                 VALUES (?, ?, ?, ?)''',
+             (property_id, room_config_id, room_number, media_url))
     
     conn.commit()
     conn.close()
-
-    print("Tarun Room Added:", room_number)
     
     flash('Room added successfully!', 'success')
     return redirect(url_for('my_properties'))
@@ -900,6 +1256,12 @@ def view_rooms(property_id):
     if 'user_id' not in session:
         flash('Please login to access this page', 'warning')
         return redirect(url_for('login'))
+    
+    # Clear any existing flash messages
+    session.pop('_flashes', None)
+    
+    # Get the source page from query parameter, default to 'home'
+    source = request.args.get('source', 'home')
     
     conn = get_db()
     c = conn.cursor()
@@ -918,8 +1280,8 @@ def view_rooms(property_id):
     
     # Get all rooms for this property with their configurations
     rooms = c.execute('''
-        SELECT r.id, r.room_number, rc.room_type, rc.rent, rc.electricity_charge, rc.water_charge, rc.security_deposit,
-               CASE WHEN t.id IS NOT NULL THEN 1 ELSE 0 END as is_occupied
+        SELECT r.id, r.room_number, r.room_config_id, rc.room_type, rc.rent, rc.electricity_charge, rc.water_charge, rc.security_deposit,
+               CASE WHEN t.id IS NOT NULL THEN 1 ELSE 0 END as is_occupied, r.media_url
         FROM rooms r
         JOIN room_configurations rc ON r.room_config_id = rc.id
         LEFT JOIN tenants t ON r.id = t.room_id
@@ -927,7 +1289,12 @@ def view_rooms(property_id):
         ORDER BY r.room_number
     ''', (property_id,)).fetchall()
     
-    print(f"Property: {property_data}, Rooms: {rooms}")
+    # Get all room configurations for this property
+    room_configs = c.execute('''
+        SELECT id, room_type, room_count, rent, electricity_charge, water_charge, security_deposit
+        FROM room_configurations
+        WHERE property_id = ?
+    ''', (property_id,)).fetchall()
     
     # Format the rooms data
     formatted_rooms = []
@@ -935,18 +1302,73 @@ def view_rooms(property_id):
         formatted_rooms.append({
             'id': room[0],
             'room_number': room[1],
-            'room_type': room[2],
-            'rent': room[3],
-            'electricity_charge': room[4],
-            'water_charge': room[5],
-            'security_deposit': room[6],
-            'is_occupied': bool(room[7])
+            'room_config_id': room[2],
+            'room_type': room[3],
+            'rent': room[4],
+            'electricity_charge': room[5],
+            'water_charge': room[6],
+            'security_deposit': room[7],
+            'is_occupied': bool(room[8]),
+            'media_url': room[9]
         })
     
     conn.close()
     return render_template('view_rooms.html', 
                          property=property_data,
-                         rooms=formatted_rooms)
+                         rooms=formatted_rooms,
+                         room_configs=room_configs,
+                         source=source)
+
+@app.route('/delete-room/<int:room_id>', methods=['POST'])
+def delete_room(room_id):
+    if 'user_id' not in session:
+        flash('Please login to access this page', 'warning')
+        return redirect(url_for('login'))
+    
+    conn = get_db()
+    c = conn.cursor()
+    
+    # Verify room ownership and check if occupied
+    room_data = c.execute('''
+        SELECT r.id, r.room_number, r.property_id, p.user_id, t.id as tenant_id
+        FROM rooms r
+        JOIN properties p ON r.property_id = p.id
+        LEFT JOIN tenants t ON r.id = t.room_id
+        WHERE r.id = ?
+    ''', (room_id,)).fetchone()
+    
+    if not room_data:
+        conn.close()
+        flash('Room not found', 'danger')
+        # Redirect to a safe page, perhaps the property list or dashboard
+        return redirect(url_for('my_properties'))
+    
+    # Check if the property belongs to the logged-in user
+    if room_data['user_id'] != session['user_id']:
+        conn.close()
+        flash('Unauthorized to delete this room', 'danger')
+        return redirect(url_for('my_properties'))
+    
+    # Check if the room is occupied
+    if room_data['tenant_id'] is not None:
+        conn.close()
+        flash(f'Cannot delete Room {room_data["room_number"]} as it is currently occupied.', 'danger')
+        # Redirect back to the view rooms page for this property
+        return redirect(url_for('view_rooms', property_id=room_data['property_id']))
+    
+    # If not occupied and authorized, proceed with deletion
+    try:
+        c.execute('DELETE FROM rooms WHERE id = ?', (room_id,))
+        conn.commit()
+        flash(f'Room {room_data["room_number"]} deleted successfully!', 'success')
+    except Exception as e:
+        conn.rollback()
+        flash(f'An error occurred while deleting Room {room_data["room_number"]}: {str(e)}', 'danger')
+    finally:
+        conn.close()
+    
+    # Redirect back to the view rooms page for this property
+    return redirect(url_for('view_rooms', property_id=room_data['property_id']))
 
 @app.route('/bills')
 def view_bills():
@@ -1656,8 +2078,8 @@ def send_reminder(payment_id):
         # Create email message
         msg = Message(
             'Payment Reminder - RentEase',
-            recipients=[payment_data['email']],
-            cc=['trnvshisth@gmail.com']
+            recipients=[payment_data['email']]
+            # cc=['trnvshisth@gmail.com']
         )
         
         # Format the email body with HTML
@@ -1720,3 +2142,111 @@ def send_reminder(payment_id):
     
     conn.close()
     return redirect(url_for('all_bills'))
+
+@app.route('/edit-room/<int:room_id>', methods=['POST'])
+def edit_room(room_id):
+    if 'user_id' not in session:
+        flash('Please login to access this page', 'warning')
+        return redirect(url_for('login'))
+    
+    conn = get_db()
+    c = conn.cursor()
+    
+    # Verify room ownership
+    room_data = c.execute('''
+        SELECT r.*, p.user_id, p.name as property_name
+        FROM rooms r
+        JOIN properties p ON r.property_id = p.id
+        WHERE r.id = ?
+    ''', (room_id,)).fetchone()
+    
+    if not room_data or room_data['user_id'] != session['user_id']:
+        conn.close()
+        flash('Room not found or unauthorized', 'danger')
+        return redirect(url_for('my_properties'))
+    
+    # Get form data
+    room_number = request.form.get('room_number')
+    room_config_id = request.form.get('room_config')
+    room_media = request.files.get('room_media')
+    
+    # Verify room configuration belongs to the property
+    config = c.execute('''
+        SELECT id FROM room_configurations 
+        WHERE id = ? AND property_id = ?
+    ''', (room_config_id, room_data['property_id'])).fetchone()
+    
+    if not config:
+        conn.close()
+        flash('Invalid room configuration', 'danger')
+        return redirect(url_for('view_rooms', property_id=room_data['property_id']))
+    
+    # Check if new room number already exists for this property
+    if room_number != room_data['room_number']:
+        existing_room = c.execute('''
+            SELECT id FROM rooms 
+            WHERE property_id = ? AND room_number = ? AND id != ?
+        ''', (room_data['property_id'], room_number, room_id)).fetchone()
+        
+        if existing_room:
+            conn.close()
+            flash('Room number already exists for this property', 'danger')
+            return redirect(url_for('view_rooms', property_id=room_data['property_id']))
+    
+    # Handle room media upload if provided
+    media_url = room_data['media_url']  # Keep existing media URL by default
+    if room_media and room_media.filename:
+        try:
+            # Create the folder structure in Google Drive
+            inventory_folder = find_or_create_folder('inventory')
+            videos_folder = find_or_create_folder('videos', parent_folder_id=inventory_folder)
+            building_folder = find_or_create_folder(room_data['property_name'], parent_folder_id=videos_folder)
+            
+            # Save file temporarily
+            temp_filename = f"temp_room_media_{room_id}_{int(time.time())}"
+            temp_path = os.path.join('app/static/uploads', temp_filename)
+            room_media.save(temp_path)
+            
+            # Determine file extension and mime type
+            file_ext = os.path.splitext(room_media.filename)[1].lower()
+            mime_type = 'video/mp4' if file_ext == '.mp4' else 'image/jpeg'
+            
+            # Upload to Google Drive
+            drive_file_id = upload_file(
+                temp_path,
+                f"room_{room_number}{file_ext}",
+                mime_type,
+                folder_id=building_folder
+            )
+            
+            # Get the web view URL
+            media_url = get_file_url(drive_file_id)
+            
+            # Clean up temporary file
+            try:
+                os.remove(temp_path)
+            except:
+                pass
+                
+        except Exception as e:
+            print("Error in media upload process:", str(e))
+            flash('Error uploading room media: ' + str(e), 'warning')
+            # Clean up temp file if it exists
+            try:
+                if os.path.exists(temp_path):
+                    os.remove(temp_path)
+            except:
+                pass
+    
+    # Update room data
+    c.execute('''
+        UPDATE rooms 
+        SET room_number = ?, room_config_id = ?, media_url = ?
+        WHERE id = ?
+    ''', (room_number, room_config_id, media_url, room_id))
+    
+    conn.commit()
+    conn.close()
+    
+    flash('Room updated successfully!', 'success')
+    return redirect(url_for('view_rooms', property_id=room_data['property_id']))

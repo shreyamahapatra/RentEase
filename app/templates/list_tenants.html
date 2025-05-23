@@ -108,7 +108,7 @@
                   <td>{{ tenant.move_in_date }}</td>
                   <td>
                     {% if tenant.police_verification %}
-                      <a href="{{ url_for('static', filename='uploads/' + tenant.police_verification) }}" 
+                      <a href="{{ tenant.police_verification }}" 
                          target="_blank" class="btn btn-sm btn-outline-primary">
                         <i class="bi bi-file-earmark-text"></i> View
                       </a>

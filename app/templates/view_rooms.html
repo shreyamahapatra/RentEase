@@ -69,9 +69,15 @@
           <h2>{{ property[1] }} - Rooms</h2>
           <p class="text-muted"><i class="bi bi-geo-alt"></i> {{ property[2] }}</p>
         </div>
+        {% if source == 'properties' %}
         <a href="{{ url_for('my_properties') }}" class="btn btn-secondary">
           <i class="bi bi-arrow-left"></i> Back to Properties
         </a>
+        {% else %}
+        <a href="{{ url_for('index') }}" class="btn btn-secondary">
+          <i class="bi bi-arrow-left"></i> Back to Home
+        </a>
+        {% endif %}
       </div>
 
       {% with messages = get_flashed_messages(with_categories=true) %}
@@ -93,6 +99,8 @@
               <th>Water</th>
               <th>Security Deposit</th>
               <th>Status</th>
+              <th>Media</th>
+              <th>Actions</th>
             </tr>
           </thead>
           <tbody>
@@ -110,6 +118,90 @@
                 {% else %}
                   <span class="badge bg-success">Available</span>
                 {% endif %}
+              </td>
+              <td>
+                {% if room.media_url %}
+                  <a href="{{ room.media_url }}" target="_blank" class="btn btn-info btn-sm">
+                    <i class="bi bi-camera-video"></i> View Media
+                  </a>
+                {% else %}
+                  <span class="text-muted">No media</span>
+                {% endif %}
+              </td>
+              <td>
+                <button type="button" class="btn btn-primary btn-sm me-2" data-bs-toggle="modal" data-bs-target="#editRoomModal{{ room.id }}">
+                  Edit
+                </button>
+                <button type="button" class="btn btn-danger btn-sm" data-bs-toggle="modal" data-bs-target="#deleteRoomModal{{ room.id }}">
+                  Delete
+                </button>
+
+                <!-- Edit Room Modal -->
+                <div class="modal fade" id="editRoomModal{{ room.id }}" tabindex="-1" aria-labelledby="editRoomModalLabel{{ room.id }}" aria-hidden="true">
+                  <div class="modal-dialog">
+                    <div class="modal-content">
+                      <div class="modal-header">
+                        <h5 class="modal-title" id="editRoomModalLabel{{ room.id }}">Edit Room {{ room.room_number }}</h5>
+                        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                      </div>
+                      <div class="modal-body">
+                        <form action="{{ url_for('edit_room', room_id=room.id) }}" method="POST" enctype="multipart/form-data">
+                          <div class="mb-3">
+                            <label for="room_number" class="form-label">Room Number</label>
+                            <input type="number" class="form-control" id="room_number" name="room_number" value="{{ room.room_number }}" required>
+                          </div>
+                          <div class="mb-3">
+                            <label for="room_config" class="form-label">Room Configuration</label>
+                            <select class="form-select" id="room_config" name="room_config" required>
+                              {% for config in room_configs %}
+                                <option value="{{ config.id }}" {% if config.id == room.room_config_id %}selected{% endif %}>
+                                  {{ config.room_type|replace('_', ' ')|title }} - ₹{{ config.rent }}/month
+                                </option>
+                              {% endfor %}
+                            </select>
+                          </div>
+                          <div class="mb-3">
+                            <label for="room_media" class="form-label">Room Media</label>
+                            <input type="file" class="form-control" id="room_media" name="room_media" accept="image/*,video/*">
+                            {% if room.media_url %}
+                            <small class="text-muted">Current media: <a href="{{ room.media_url }}" target="_blank">View</a></small>
+                            {% endif %}
+                          </div>
+                          <div class="modal-footer">
+                            <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                            <button type="submit" class="btn btn-primary">Save Changes</button>
+                          </div>
+                        </form>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <!-- Delete Room Modal -->
+                <div class="modal fade" id="deleteRoomModal{{ room.id }}" tabindex="-1" aria-labelledby="deleteRoomModalLabel{{ room.id }}" aria-hidden="true">
+                  <div class="modal-dialog">
+                    <div class="modal-content">
+                      <div class="modal-header">
+                        <h5 class="modal-title" id="deleteRoomModalLabel{{ room.id }}">Confirm Room Deletion</h5>
+                        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                      </div>
+                      <div class="modal-body">
+                        Are you sure you want to delete Room <strong>{{ room.room_number }}</strong>? This action cannot be undone.
+                        {% if room.is_occupied %}
+                        <p class="text-danger mt-2"><strong>This room is currently occupied. You cannot delete an occupied room.</strong></p>
+                        {% endif %}
+                      </div>
+                      <div class="modal-footer">
+                        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                        {% if not room.is_occupied %}
+                        <form action="{{ url_for('delete_room', room_id=room.id) }}" method="POST" style="display: inline;">
+                          <button type="submit" class="btn btn-danger">Delete Room</button>
+                        </form>
+                        {% endif %}
+                      </div>
+                    </div>
+                  </div>
+                </div>
               </td>
             </tr>
             {% endfor %}
