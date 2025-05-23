@@ -99,6 +99,7 @@
               <th>Water</th>
               <th>Security Deposit</th>
               <th>Status</th>
+              <th>Current Tenant</th>
               <th>Media</th>
               <th>Actions</th>
             </tr>
@@ -120,6 +121,21 @@
                 {% endif %}
               </td>
               <td>
+                {% if room.is_occupied and room.current_tenant_name %}
+                  <div>
+                    <strong>{{ room.current_tenant_name }}</strong><br>
+                    <small class="text-muted">
+                      Move In: {{ room.tenant_move_in_date }}<br>
+                      {% if room.tenant_move_out_date %}
+                        Move Out: {{ room.tenant_move_out_date }}
+                      {% endif %}
+                    </small>
+                  </div>
+                {% else %}
+                  <span class="text-muted">No tenant</span>
+                {% endif %}
+              </td>
+              <td>
                 {% if room.media_url %}
                   <a href="{{ room.media_url }}" target="_blank" class="btn btn-info btn-sm">
                     <i class="bi bi-camera-video"></i> View Media
@@ -130,10 +146,10 @@
               </td>
               <td>
                 <button type="button" class="btn btn-primary btn-sm me-2" data-bs-toggle="modal" data-bs-target="#editRoomModal{{ room.id }}">
-                  Edit
+                  <i class="bi bi-pencil-square"></i>
                 </button>
                 <button type="button" class="btn btn-danger btn-sm" data-bs-toggle="modal" data-bs-target="#deleteRoomModal{{ room.id }}">
-                  Delete
+                  <i class="bi bi-trash"></i>
                 </button>
 
                 <!-- Edit Room Modal -->

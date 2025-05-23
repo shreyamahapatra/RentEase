@@ -20,13 +20,6 @@ def init_db():
     conn = get_db()
     c = conn.cursor()
     
-    # # Drop existing tables in reverse order of dependencies
-    # c.execute('DROP TABLE IF EXISTS bill_payments')
-    # c.execute('DROP TABLE IF EXISTS tenants')
-    # c.execute('DROP TABLE IF EXISTS room_configurations')
-    # c.execute('DROP TABLE IF EXISTS properties')
-    # c.execute('DROP TABLE IF EXISTS users')
-    
     # Create tables with new schema
     c.execute('''CREATE TABLE IF NOT EXISTS users
                  (id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -56,8 +49,18 @@ def init_db():
                   room_config_id INTEGER NOT NULL,
                   room_number INTEGER NOT NULL,
                   media_url TEXT,
+                  is_available BOOLEAN DEFAULT TRUE,
                   FOREIGN KEY (property_id) REFERENCES properties (id),
                   FOREIGN KEY (room_config_id) REFERENCES room_configurations (id))''')
+    
+    # Check if is_available column exists in rooms table
+    c.execute("PRAGMA table_info(rooms)")
+    columns = [column[1] for column in c.fetchall()]
+    
+    # Add is_available column if it doesn't exist
+    if 'is_available' not in columns:
+        c.execute('ALTER TABLE rooms ADD COLUMN is_available BOOLEAN DEFAULT TRUE')
+    
     c.execute('''CREATE TABLE IF NOT EXISTS tenants
                  (id INTEGER PRIMARY KEY AUTOINCREMENT,
                   name TEXT NOT NULL,
@@ -66,6 +69,7 @@ def init_db():
                   phone_number TEXT NOT NULL,
                   email TEXT,
                   move_in_date DATE NOT NULL,
+                  move_out_date DATE,
                   police_verification TEXT,
                   FOREIGN KEY (property_id) REFERENCES properties (id),
                   FOREIGN KEY (room_id) REFERENCES rooms (id))''')
@@ -98,6 +102,14 @@ def init_db():
     if 'media_url' not in columns:
         c.execute('ALTER TABLE rooms ADD COLUMN media_url TEXT')
     
+    # Check if move_out_date column exists in tenants table
+    c.execute("PRAGMA table_info(tenants)")
+    columns = [column[1] for column in c.fetchall()]
+    
+    # Add move_out_date column if it doesn't exist
+    if 'move_out_date' not in columns:
+        c.execute('ALTER TABLE tenants ADD COLUMN move_out_date DATE')
+    
     conn.commit()
     conn.close()
 
@@ -127,7 +139,7 @@ def index():
         
         # Get tenants data with payment information
         tenants = c.execute('''
-            SELECT t.id, t.name, t.property_id, t.room_id, t.phone_number, t.email, t.move_in_date, t.police_verification,
+            SELECT t.id, t.name, t.property_id, t.room_id, t.phone_number, t.email, t.move_in_date, t.move_out_date, t.police_verification,
                    p.name as property_name, r.room_number, rc.room_type, rc.rent, rc.electricity_charge, rc.water_charge, rc.security_deposit,
                    COALESCE(SUM(CASE 
                         WHEN strftime('%m', bp.payment_date) = ? AND strftime('%Y', bp.payment_date) = ? 
@@ -422,24 +434,24 @@ def add_tenant():
         room_id = request.form.get('room')
         tenant_name = request.form.get('tenant_name')
         phone_number = request.form.get('phone_number')
-        email = request.form.get('email')  # Get email from form
+        email = request.form.get('email')
         move_in_date = request.form.get('move_in_date')
+        move_out_date = request.form.get('move_out_date')
         police_verification = request.files.get('police_verification')
         
-        print("Raw form data:")
-        print("Property ID:", property_id, type(property_id))
-        print("Room ID:", room_id, type(room_id))
-        print("Tenant Name:", tenant_name, type(tenant_name))
-        print("Phone Number:", phone_number, type(phone_number))
-        print("Email:", email, type(email))
-        print("Move-in Date:", move_in_date, type(move_in_date))
+        conn = get_db()
+        c = conn.cursor()
         
-        # Save police verification file to Google Drive if provided
+        # Check if room is available
+        room = c.execute('SELECT is_available FROM rooms WHERE id = ?', (room_id,)).fetchone()
+        if not room or not room['is_available']:
+            conn.close()
+            flash('This room is not available!', 'danger')
+            return redirect(url_for('add_tenant'))
+        
+        # Handle police verification file
         drive_file_data = None
         if police_verification:
-            # --- Google Drive Upload --- START
-            conn = get_db()
-            c = conn.cursor()
             # Get property name and room number
             property_data = c.execute('SELECT name FROM properties WHERE id = ?', (property_id,)).fetchone()
             property_name = property_data['name'] if property_data else 'Unknown Property'
@@ -447,8 +459,6 @@ def add_tenant():
             room_data = c.execute('SELECT room_number FROM rooms WHERE id = ?', (room_id,)).fetchone()
             room_number = room_data['room_number'] if room_data else 'Unknown Room'
             
-            conn.close()
-
             # Find or create property folder
             folder_id = find_or_create_folder(property_name)
 
@@ -462,7 +472,7 @@ def add_tenant():
                     # Upload to Google Drive into the property folder
                     drive_file_id = upload_file(
                         temp_path,
-                        f"police_verification_{tenant_name}_Room{room_number}.pdf", # Include room number
+                        f"police_verification_{tenant_name}_Room{room_number}.pdf",
                         'application/pdf',
                         folder_id=folder_id
                     )
@@ -475,59 +485,41 @@ def add_tenant():
                 except Exception as e:
                     print(f"Error uploading to Google Drive: {str(e)}")
                     flash('Error uploading police verification document', 'danger')
-                    drive_file_data = None # Ensure it's None on failure
+                    drive_file_data = None
                 finally:
                     # Clean up temporary file
                     try:
                         os.remove(temp_path)
                     except:
-                        pass # Ignore errors if file doesn't exist
-            else:
-                flash('Could not create or find Google Drive folder for the property.', 'danger')
-                drive_file_data = None # Ensure it's None on failure
-            # --- Google Drive Upload --- END
-
-        conn = get_db()
-        c = conn.cursor()
+                        pass
         
-        # Check if room is already occupied
-        existing_tenant = c.execute('''
-            SELECT id FROM tenants WHERE room_id = ?
-        ''', (room_id,)).fetchone()
-        
-        if existing_tenant:
+        # Start transaction
+        try:
+            c.execute('BEGIN TRANSACTION')
+            
+            # Insert tenant
+            c.execute('''INSERT INTO tenants 
+                        (name, property_id, room_id, phone_number, email, move_in_date, move_out_date, police_verification) 
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)''',
+                     (tenant_name, property_id, room_id, phone_number, email, move_in_date, move_out_date, drive_file_data))
+            
+            # Mark room as unavailable
+            c.execute('UPDATE rooms SET is_available = FALSE WHERE id = ?', (room_id,))
+            
+            c.execute('COMMIT')
+            flash('Tenant added successfully!', 'success')
+        except Exception as e:
+            c.execute('ROLLBACK')
+            flash(f'Error adding tenant: {str(e)}', 'danger')
+        finally:
             conn.close()
-            flash('This room is already occupied!', 'danger')
-            return redirect(url_for('add_tenant'))
         
-        # Insert tenant data with explicit parameter names
-        params = (
-            tenant_name,      # name
-            int(property_id), # property_id
-            int(room_id),     # room_id
-            phone_number,     # phone_number
-            email,           # email
-            move_in_date,     # move_in_date
-            drive_file_data  # police_verification (now contains both ID and URL)
-        )
-        print("Insert parameters:", params)
-        
-        c.execute('''INSERT INTO tenants 
-                    (name, property_id, room_id, phone_number, email, move_in_date, police_verification) 
-                    VALUES (?, ?, ?, ?, ?, ?, ?)''', params)
-        tenant_id = c.lastrowid
-        
-        conn.commit()
-        conn.close()
-        
-        flash('Tenant added successfully!', 'success')
         return redirect(url_for('list_tenants'))
 
-    # Get all properties for the logged-in user with their rooms
+    # Get all properties for the logged-in user with their available rooms
     conn = get_db()
     c = conn.cursor()
     
-    # Get all properties for the logged-in user with their rooms
     properties = c.execute('''
         SELECT p.id, p.name, p.address, 
                r.id as room_id, r.room_number,
@@ -535,12 +527,9 @@ def add_tenant():
         FROM properties p
         LEFT JOIN rooms r ON p.id = r.property_id
         LEFT JOIN room_configurations rc ON r.room_config_id = rc.id
-        WHERE p.user_id = ?
-        AND (r.id IS NULL OR r.id NOT IN (SELECT room_id FROM tenants))
+        WHERE p.user_id = ? AND (r.is_available = TRUE OR r.is_available IS NULL)
         ORDER BY p.id, r.room_number
     ''', (session['user_id'],)).fetchall()
-    
-    print("Properties for add tenant:", properties)
     
     # Format properties and rooms
     formatted_properties = []
@@ -582,6 +571,9 @@ def list_tenants():
         flash('Please login to access this page', 'warning')
         return redirect(url_for('login'))
     
+    # Get filter parameter
+    status_filter = request.args.get('status', 'all')  # 'all', 'active', or 'past'
+    
     conn = get_db()
     c = conn.cursor()
     
@@ -598,9 +590,10 @@ def list_tenants():
             'address': prop[2]
         })
     
-    # Get all tenants with their property and room information
-    tenants = c.execute('''
-        SELECT t.id, t.name, t.property_id, t.room_id, t.phone_number, t.email, t.move_in_date, t.police_verification,
+    # Base query for tenants
+    query = '''
+        SELECT t.id, t.name, t.property_id, t.room_id, t.phone_number, t.email, 
+               t.move_in_date, t.move_out_date, t.police_verification,
                p.name as property_name,
                rc.room_type, rc.rent, rc.electricity_charge, rc.water_charge,
                r.room_number
@@ -609,17 +602,27 @@ def list_tenants():
         JOIN rooms r ON t.room_id = r.id
         JOIN room_configurations rc ON r.room_config_id = rc.id
         WHERE p.user_id = ?
-        ORDER BY r.room_number
-    ''', (session['user_id'],)).fetchall()
+    '''
+    
+    # Add status filter
+    if status_filter == 'active':
+        query += ' AND t.move_out_date IS NULL'
+    elif status_filter == 'past':
+        query += ' AND t.move_out_date IS NOT NULL'
+    
+    query += ' ORDER BY t.move_in_date DESC'
+    
+    # Get all tenants with their property and room information
+    tenants = c.execute(query, (session['user_id'],)).fetchall()
     
     # Format tenants data
     formatted_tenants = []
     for tenant in tenants:
         # Parse police verification data to get the URL
         police_verification_url = None
-        if tenant[7]:  # police_verification field
+        if tenant[8]:  # police_verification field
             try:
-                _, police_verification_url = tenant[7].split('|')
+                _, police_verification_url = tenant[8].split('|')
             except:
                 pass
 
@@ -631,19 +634,21 @@ def list_tenants():
             'phone_number': tenant[4],
             'email': tenant[5],
             'move_in_date': tenant[6],
-            'police_verification': police_verification_url,  # Use the parsed URL
-            'property_name': tenant[8],
-            'room_type': tenant[9],
-            'rent': tenant[10],
-            'electricity_charge': tenant[11],
-            'water_charge': tenant[12],
-            'room_number': tenant[13]
+            'move_out_date': tenant[7],
+            'police_verification': police_verification_url,
+            'property_name': tenant[9],
+            'room_type': tenant[10],
+            'rent': tenant[11],
+            'electricity_charge': tenant[12],
+            'water_charge': tenant[13],
+            'room_number': tenant[14]
         })
     
     conn.close()
     return render_template('list_tenants.html', 
                          properties=formatted_properties,
-                         tenants=formatted_tenants)
+                         tenants=formatted_tenants,
+                         status_filter=status_filter)
 
 @app.route('/delete-tenant/<int:tenant_id>', methods=['POST'])
 def delete_tenant(tenant_id):
@@ -962,6 +967,7 @@ def edit_tenant(tenant_id):
         phone_number = request.form.get('phone_number')
         email = request.form.get('email')  # Get email from form
         move_in_date = request.form.get('move_in_date')
+        move_out_date = request.form.get('move_out_date')
         police_verification = request.files.get('police_verification')
         
         # Get current tenant data, including property name and room number
@@ -1026,9 +1032,9 @@ def edit_tenant(tenant_id):
         # Update tenant data
         c.execute('''
             UPDATE tenants
-            SET name = ?, phone_number = ?, email = ?, move_in_date = ?, police_verification = ?
+            SET name = ?, phone_number = ?, email = ?, move_in_date = ?, move_out_date = ?, police_verification = ?
             WHERE id = ?
-        ''', (tenant_name, phone_number, email, move_in_date, drive_file_data, tenant_id))
+        ''', (tenant_name, phone_number, email, move_in_date, move_out_date, drive_file_data, tenant_id))
 
         conn.commit()
         conn.close()
@@ -1038,7 +1044,7 @@ def edit_tenant(tenant_id):
     
     # Get tenant data for editing
     tenant = c.execute('''
-        SELECT t.id, t.name, t.property_id, t.room_id, t.phone_number, t.email, t.move_in_date, t.police_verification,
+        SELECT t.id, t.name, t.property_id, t.room_id, t.phone_number, t.email, t.move_in_date, t.move_out_date, t.police_verification,
                p.name as property_name,
                rc.room_type, rc.rent, rc.electricity_charge, rc.water_charge,
                r.room_number
@@ -1056,9 +1062,9 @@ def edit_tenant(tenant_id):
     
     # Parse the police verification data
     police_verification_url = None
-    if tenant[7]:  # police_verification field
+    if tenant[8]:  # police_verification field
         try:
-            _, police_verification_url = tenant[7].split('|')
+            _, police_verification_url = tenant[8].split('|')
         except:
             pass
     
@@ -1070,13 +1076,14 @@ def edit_tenant(tenant_id):
         'phone_number': tenant[4],
         'email': tenant[5],  # Add email field
         'move_in_date': tenant[6],
+        'move_out_date': tenant[7],
         'police_verification': police_verification_url,
-        'property_name': tenant[8],
-        'room_type': tenant[9],
-        'rent': tenant[10],
-        'electricity_charge': tenant[11],
-        'water_charge': tenant[12],
-        'room_number': tenant[13]
+        'property_name': tenant[9],
+        'room_type': tenant[10],
+        'rent': tenant[11],
+        'electricity_charge': tenant[12],
+        'water_charge': tenant[13],
+        'room_number': tenant[14]
     }
     
     conn.close()
@@ -1257,67 +1264,56 @@ def view_rooms(property_id):
         flash('Please login to access this page', 'warning')
         return redirect(url_for('login'))
     
-    # Clear any existing flash messages
-    session.pop('_flashes', None)
-    
-    # Get the source page from query parameter, default to 'home'
-    source = request.args.get('source', 'home')
-    
     conn = get_db()
     c = conn.cursor()
     
     # Get property details
     property_data = c.execute('''
-        SELECT id, name, address 
-        FROM properties 
+        SELECT * FROM properties 
         WHERE id = ? AND user_id = ?
     ''', (property_id, session['user_id'])).fetchone()
     
     if not property_data:
         conn.close()
-        flash('Property not found', 'danger')
-        return redirect(url_for('my_properties'))
+        flash('Property not found or unauthorized', 'danger')
+        return redirect(url_for('list_properties'))
     
-    # Get all rooms for this property with their configurations
+    # Get all rooms for the property with their configurations and current tenant info
     rooms = c.execute('''
-        SELECT r.id, r.room_number, r.room_config_id, rc.room_type, rc.rent, rc.electricity_charge, rc.water_charge, rc.security_deposit,
-               CASE WHEN t.id IS NOT NULL THEN 1 ELSE 0 END as is_occupied, r.media_url
+        SELECT r.*, rc.*, 
+               t.name as current_tenant_name,
+               t.move_in_date as tenant_move_in_date,
+               t.move_out_date as tenant_move_out_date,
+               r.is_available
         FROM rooms r
-        JOIN room_configurations rc ON r.room_config_id = rc.id
-        LEFT JOIN tenants t ON r.id = t.room_id
+        LEFT JOIN room_configurations rc ON r.room_config_id = rc.id
+        LEFT JOIN tenants t ON r.id = t.room_id AND t.move_out_date IS NULL
         WHERE r.property_id = ?
         ORDER BY r.room_number
     ''', (property_id,)).fetchall()
     
-    # Get all room configurations for this property
-    room_configs = c.execute('''
-        SELECT id, room_type, room_count, rent, electricity_charge, water_charge, security_deposit
-        FROM room_configurations
-        WHERE property_id = ?
-    ''', (property_id,)).fetchall()
-    
-    # Format the rooms data
+    # Format rooms data
     formatted_rooms = []
     for room in rooms:
-        formatted_rooms.append({
-            'id': room[0],
-            'room_number': room[1],
-            'room_config_id': room[2],
-            'room_type': room[3],
-            'rent': room[4],
-            'electricity_charge': room[5],
-            'water_charge': room[6],
-            'security_deposit': room[7],
-            'is_occupied': bool(room[8]),
-            'media_url': room[9]
-        })
+        formatted_room = {
+            'id': room['id'],
+            'room_number': room['room_number'],
+            'room_type': room['room_type'],
+            'rent': room['rent'],
+            'electricity_charge': room['electricity_charge'],
+            'water_charge': room['water_charge'],
+            'security_deposit': room['security_deposit'],
+            'is_occupied': not room['is_available'],
+            'current_tenant': {
+                'name': room['current_tenant_name'],
+                'move_in_date': room['tenant_move_in_date'],
+                'move_out_date': room['tenant_move_out_date']
+            } if room['current_tenant_name'] else None
+        }
+        formatted_rooms.append(formatted_room)
     
     conn.close()
-    return render_template('view_rooms.html', 
-                         property=property_data,
-                         rooms=formatted_rooms,
-                         room_configs=room_configs,
-                         source=source)
+    return render_template('view_rooms.html', property=property_data, rooms=formatted_rooms)
 
 @app.route('/delete-room/<int:room_id>', methods=['POST'])
 def delete_room(room_id):
@@ -2250,3 +2246,194 @@ def edit_room(room_id):
     
     flash('Room updated successfully!', 'success')
     return redirect(url_for('view_rooms', property_id=room_data['property_id']))
+
+@app.route('/tenant/login', methods=['GET', 'POST'])
+def tenant_login():
+    if request.method == 'POST':
+        email = request.form.get('email')
+        phone = request.form.get('phone')
+        
+        conn = get_db()
+        c = conn.cursor()
+        
+        # Verify tenant credentials
+        tenant = c.execute('''
+            SELECT t.*, p.name as property_name, r.room_number, rc.room_type, rc.rent, 
+                   rc.electricity_charge, rc.water_charge
+            FROM tenants t
+            JOIN properties p ON t.property_id = p.id
+            JOIN rooms r ON t.room_id = r.id
+            JOIN room_configurations rc ON r.room_config_id = rc.id
+            WHERE t.email = ? AND t.phone_number = ?
+        ''', (email, phone)).fetchone()
+        
+        if tenant:
+            # Store tenant info in session
+            session['tenant_id'] = tenant[0]
+            session['tenant_name'] = tenant[1]
+            flash('Welcome back!', 'success')
+            return redirect(url_for('tenant_portal'))
+        else:
+            flash('Invalid credentials', 'danger')
+        
+        conn.close()
+    
+    return render_template('tenant_login.html')
+
+@app.route('/tenant/logout')
+def tenant_logout():
+    session.pop('tenant_id', None)
+    session.pop('tenant_name', None)
+    flash('Logged out successfully', 'success')
+    return redirect(url_for('tenant_login'))
+
+@app.route('/tenant/portal')
+def tenant_portal():
+    if 'tenant_id' not in session:
+        flash('Please login to access the portal', 'warning')
+        return redirect(url_for('tenant_login'))
+    
+    conn = get_db()
+    c = conn.cursor()
+    
+    # Get tenant details
+    tenant = c.execute('''
+        SELECT t.*, p.name as property_name, r.room_number, rc.room_type, rc.rent, 
+               rc.electricity_charge, rc.water_charge
+        FROM tenants t
+        JOIN properties p ON t.property_id = p.id
+        JOIN rooms r ON t.room_id = r.id
+        JOIN room_configurations rc ON r.room_config_id = rc.id
+        WHERE t.id = ?
+    ''', (session['tenant_id'],)).fetchone()
+    
+    if not tenant:
+        conn.close()
+        flash('Tenant not found', 'danger')
+        return redirect(url_for('tenant_login'))
+    
+    # Get current month's bill status
+    current_date = datetime.now()
+    current_month = current_date.month
+    current_year = current_date.year
+    
+    # Calculate total amount using named columns
+    total_amount = float(tenant['rent']) + float(tenant['electricity_charge']) + float(tenant['water_charge'])
+    
+    # Check if current month's bill is paid
+    current_month_payment = c.execute('''
+        SELECT COALESCE(SUM(amount), 0)
+        FROM bill_payments
+        WHERE tenant_id = ? 
+        AND strftime('%m', payment_date) = ? 
+        AND strftime('%Y', payment_date) = ?
+    ''', (session['tenant_id'], str(current_month).zfill(2), str(current_year))).fetchone()[0]
+    
+    is_paid = float(current_month_payment) >= total_amount
+    
+    # Get recent payments
+    recent_payments = c.execute('''
+        SELECT payment_date, amount, payment_mode
+        FROM bill_payments
+        WHERE tenant_id = ?
+        ORDER BY payment_date DESC
+        LIMIT 5
+    ''', (session['tenant_id'],)).fetchall()
+    
+    # Get previous bills
+    previous_bills = []
+    for i in range(1, 7):  # Last 6 months
+        month_date = current_date - timedelta(days=30*i)
+        month = month_date.month
+        year = month_date.year
+        
+        payment = c.execute('''
+            SELECT COALESCE(SUM(amount), 0)
+            FROM bill_payments
+            WHERE tenant_id = ? 
+            AND strftime('%m', payment_date) = ? 
+            AND strftime('%Y', payment_date) = ?
+        ''', (session['tenant_id'], str(month).zfill(2), str(year))).fetchone()[0]
+        
+        previous_bills.append({
+            'month': month_date.strftime('%B %Y'),
+            'rent': float(tenant['rent']),
+            'electricity': float(tenant['electricity_charge']),
+            'water': float(tenant['water_charge']),
+            'total': total_amount,
+            'is_paid': float(payment) >= total_amount
+        })
+    
+    # Format tenant data
+    formatted_tenant = {
+        'name': tenant['name'],
+        'property_name': tenant['property_name'],
+        'room_number': tenant['room_number'],
+        'rent': float(tenant['rent']),
+        'electricity_charge': float(tenant['electricity_charge']),
+        'water_charge': float(tenant['water_charge']),
+        'total_amount': total_amount,
+        'due_date': (current_date.replace(day=1) + timedelta(days=4)).strftime('%Y-%m-%d'),
+        'is_paid': is_paid
+    }
+    
+    # Format recent payments
+    formatted_payments = []
+    for payment in recent_payments:
+        formatted_payments.append({
+            'payment_date': payment[0],
+            'amount': float(payment[1]),
+            'payment_mode': payment[2]
+        })
+    
+    conn.close()
+    
+    return render_template('tenant_portal.html',
+                         tenant=formatted_tenant,
+                         recent_payments=formatted_payments,
+                         previous_bills=previous_bills)
+
+@app.route('/move-out-tenant/<int:tenant_id>', methods=['POST'])
+def move_out_tenant(tenant_id):
+    if 'user_id' not in session:
+        flash('Please login to access this page', 'warning')
+        return redirect(url_for('login'))
+    
+    move_out_date = request.form.get('move_out_date')
+    
+    conn = get_db()
+    c = conn.cursor()
+    
+    # Verify tenant ownership and get room_id
+    tenant = c.execute('''
+        SELECT t.*, p.user_id as property_owner_id 
+        FROM tenants t
+        JOIN properties p ON t.property_id = p.id
+        WHERE t.id = ?
+    ''', (tenant_id,)).fetchone()
+    
+    if not tenant or tenant['property_owner_id'] != session['user_id']:
+        conn.close()
+        flash('Tenant not found or unauthorized', 'danger')
+        return redirect(url_for('list_tenants'))
+    
+    try:
+        c.execute('BEGIN TRANSACTION')
+        
+        # Update tenant's move out date
+        c.execute('UPDATE tenants SET move_out_date = ? WHERE id = ?', 
+                 (move_out_date, tenant_id))
+        
+        # Mark room as available
+        c.execute('UPDATE rooms SET is_available = TRUE WHERE id = ?', 
+                 (tenant['room_id'],))
+        
+        c.execute('COMMIT')
+        flash('Tenant has been marked as moved out successfully!', 'success')
+    except Exception as e:
+        c.execute('ROLLBACK')
+        flash(f'Error updating tenant: {str(e)}', 'danger')
+    finally:
+        conn.close()
+    
+    return redirect(url_for('list_tenants'))

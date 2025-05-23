@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="utf-8">
+  <meta content="width=device-width, initial-scale=1.0" name="viewport">
+  <title>Tenant Portal - RentEase</title>
+  <meta name="description" content="">
+  <meta name="keywords" content="">
+
+  <!-- Favicons -->
+  <link href="{{ url_for('static', filename='assets/img/favicon.png') }}" rel="icon">
+  <link href="{{ url_for('static', filename='assets/img/apple-touch-icon.png') }}" rel="apple-touch-icon">
+
+  <!-- Fonts -->
+  <link href="https://fonts.googleapis.com" rel="preconnect">
+  <link href="https://fonts.gstatic.com" rel="preconnect" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Roboto:ital,wght@0,100;0,300;0,400;0,500;0,700;0,900;1,100;1,300;1,400;1,500;1,700;1,900&family=Poppins:ital,wght@0,100;0,200;0,300;0,400;0,500;0,600;0,700;0,800;0,900;1,100;1,200;1,300;1,400;1,500;1,600;1,700;1,800;1,900&family=Raleway:ital,wght@0,100;0,200;0,300;0,400;0,500;0,600;0,700;0,800;0,900;1,100;1,200;1,300;1,400;1,500;1,600;1,700;1,800;1,900&display=swap" rel="stylesheet">
+
+  <!-- Vendor CSS Files -->
+  <link href="{{ url_for('static', filename='assets/vendor/bootstrap/css/bootstrap.min.css') }}" rel="stylesheet">
+  <link href="{{ url_for('static', filename='assets/vendor/bootstrap-icons/bootstrap-icons.css') }}" rel="stylesheet">
+  <link href="{{ url_for('static', filename='assets/vendor/aos/aos.css') }}" rel="stylesheet">
+
+  <!-- Main CSS File -->
+  <link href="{{ url_for('static', filename='assets/css/main.css') }}" rel="stylesheet">
+</head>
+
+<body class="index-page">
+  <header id="header" class="header d-flex align-items-center fixed-top">
+    <div class="container position-relative d-flex align-items-center justify-content-between">
+      <a href="{{ url_for('tenant_portal') }}" class="logo d-flex align-items-center me-auto me-xl-0">
+        <h1 class="sitename">RentEase</h1><span>.</span>
+      </a>
+
+      <nav id="navmenu" class="navmenu">
+        <ul>
+          <li><a href="{{ url_for('tenant_portal') }}" class="active">Dashboard</a></li>
+          <li><a href="{{ url_for('tenant_bills') }}">My Bills</a></li>
+          <li><a href="{{ url_for('tenant_payments') }}">Payment History</a></li>
+        </ul>
+        <i class="mobile-nav-toggle d-xl-none bi bi-list"></i>
+      </nav>
+
+      <a class="btn-getstarted" href="{{ url_for('tenant_logout') }}">Logout</a>
+    </div>
+  </header>
+
+  <main class="main" style="margin-top: 100px;">
+    <div class="container mt-5">
+      <div class="row">
+        <!-- Welcome Card -->
+        <div class="col-12 mb-4">
+          <div class="card">
+            <div class="card-body">
+              <h4 class="card-title">Welcome, {{ tenant.name }}!</h4>
+              <p class="card-text">
+                <i class="bi bi-house-door"></i> {{ tenant.property_name }} - Room {{ tenant.room_number }}
+              </p>
+            </div>
+          </div>
+        </div>
+
+        <!-- Current Month Bill Card -->
+        <div class="col-md-6 mb-4">
+          <div class="card h-100">
+            <div class="card-header">
+              <h5 class="card-title mb-0">Current Month Bill</h5>
+            </div>
+            <div class="card-body">
+              <div class="d-flex justify-content-between mb-2">
+                <span>Rent:</span>
+                <span class="fw-bold">₹{{ "%.2f"|format(tenant.rent) }}</span>
+              </div>
+              <div class="d-flex justify-content-between mb-2">
+                <span>Electricity:</span>
+                <span class="fw-bold">₹{{ "%.2f"|format(tenant.electricity_charge) }}</span>
+              </div>
+              <div class="d-flex justify-content-between mb-2">
+                <span>Water:</span>
+                <span class="fw-bold">₹{{ "%.2f"|format(tenant.water_charge) }}</span>
+              </div>
+              <hr>
+              <div class="d-flex justify-content-between">
+                <span class="fw-bold">Total Amount:</span>
+                <span class="fw-bold">₹{{ "%.2f"|format(tenant.total_amount) }}</span>
+              </div>
+              <div class="d-flex justify-content-between mt-2">
+                <span>Due Date:</span>
+                <span class="fw-bold">{{ tenant.due_date }}</span>
+              </div>
+              <div class="d-flex justify-content-between mt-2">
+                <span>Status:</span>
+                <span class="badge {% if tenant.is_paid %}bg-success{% else %}bg-danger{% endif %}">
+                  {{ "Paid" if tenant.is_paid else "Pending" }}
+                </span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Payment History Card -->
+        <div class="col-md-6 mb-4">
+          <div class="card h-100">
+            <div class="card-header">
+              <h5 class="card-title mb-0">Recent Payments</h5>
+            </div>
+            <div class="card-body">
+              {% if recent_payments %}
+                <div class="table-responsive">
+                  <table class="table table-hover">
+                    <thead>
+                      <tr>
+                        <th>Date</th>
+                        <th>Amount</th>
+                        <th>Mode</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {% for payment in recent_payments %}
+                      <tr>
+                        <td>{{ payment.payment_date }}</td>
+                        <td>₹{{ "%.2f"|format(payment.amount) }}</td>
+                        <td>{{ payment.payment_mode }}</td>
+                      </tr>
+                      {% endfor %}
+                    </tbody>
+                  </table>
+                </div>
+              {% else %}
+                <p class="text-muted text-center">No recent payments</p>
+              {% endif %}
+            </div>
+          </div>
+        </div>
+
+        <!-- Previous Bills Card -->
+        <div class="col-12">
+          <div class="card">
+            <div class="card-header">
+              <h5 class="card-title mb-0">Previous Bills</h5>
+            </div>
+            <div class="card-body">
+              <div class="table-responsive">
+                <table class="table table-hover">
+                  <thead>
+                    <tr>
+                      <th>Month</th>
+                      <th>Rent</th>
+                      <th>Electricity</th>
+                      <th>Water</th>
+                      <th>Total</th>
+                      <th>Status</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {% for bill in previous_bills %}
+                    <tr>
+                      <td>{{ bill.month }}</td>
+                      <td>₹{{ "%.2f"|format(bill.rent) }}</td>
+                      <td>₹{{ "%.2f"|format(bill.electricity) }}</td>
+                      <td>₹{{ "%.2f"|format(bill.water) }}</td>
+                      <td>₹{{ "%.2f"|format(bill.total) }}</td>
+                      <td>
+                        <span class="badge {% if bill.is_paid %}bg-success{% else %}bg-danger{% endif %}">
+                          {{ "Paid" if bill.is_paid else "Pending" }}
+                        </span>
+                      </td>
+                    </tr>
+                    {% endfor %}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <!-- Vendor JS Files -->
+  <script src="{{ url_for('static', filename='assets/vendor/bootstrap/js/bootstrap.bundle.min.js') }}"></script>
+  <script src="{{ url_for('static', filename='assets/vendor/aos/aos.js') }}"></script>
+  <script src="{{ url_for('static', filename='assets/js/main.js') }}"></script>
+</body>
+</html> 
