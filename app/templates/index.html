@@ -34,6 +34,12 @@
   * Author: BootstrapMade.com
   * License: https://bootstrapmade.com/license/
   ======================================================== -->
+
+  <style>
+    .header .d-flex.align-items-center {
+      gap: 0.5rem;
+    }
+  </style>
 </head>
 
 <body class="index-page">
@@ -67,10 +73,14 @@
       </nav>
 
       {% if session.get('user_id') %}
-        <a class="btn-getstarted" href="{{ url_for('logout') }}">Logout</a>
+        <div class="d-flex align-items-center">
+          <a class="btn-getstarted" href="{{ url_for('logout') }}">Logout</a>
+        </div>
       {% else %}
-        <a class="btn-getstarted me-1" href="{{ url_for('login') }}">Login</a>
-        <a class="btn-getstarted" href="{{ url_for('register') }}">Register</a>
+        <div class="d-flex align-items-center">
+          <a class="btn-getstarted" href="{{ url_for('login') }}">Login</a>
+          <a class="btn-getstarted ms-2" href="{{ url_for('register') }}">Register</a>
+        </div>
       {% endif %}
 
     </div>
