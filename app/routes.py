@@ -137,7 +137,7 @@ def index():
             prev_month = current_month - 1
             prev_year = current_year
         
-        # Get tenants data with payment information
+        # Get tenants data with payment information - only active tenants
         tenants = c.execute('''
             SELECT t.id, t.name, t.property_id, t.room_id, t.phone_number, t.email, t.move_in_date, t.move_out_date, t.police_verification,
                    p.name as property_name, r.room_number, rc.room_type, rc.rent, rc.electricity_charge, rc.water_charge, rc.security_deposit,
@@ -158,7 +158,7 @@ def index():
             LEFT JOIN bill_payments bp ON t.id = bp.tenant_id 
                 AND (strftime('%m', bp.payment_date) IN (?, ?) 
                     AND strftime('%Y', bp.payment_date) IN (?, ?))
-            WHERE p.user_id = ?
+            WHERE p.user_id = ? AND t.move_out_date IS NULL
             GROUP BY t.id
         ''', (str(current_month).zfill(2), str(current_year),
               str(prev_month).zfill(2), str(prev_year),
