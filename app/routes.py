@@ -9,6 +9,7 @@ from datetime import datetime, timedelta
 import pandas as pd
 import io
 from app.drive_utils import upload_file, get_file_url, find_or_create_folder
+from app.whatsapp_utils import send_whatsapp_message
 
 # Create uploads directory if it doesn't exist
 UPLOADS_DIR = os.path.join('app', 'static', 'uploads')
@@ -2056,7 +2057,7 @@ def send_reminder(payment_id):
     
     # Get payment and tenant details
     payment_data = c.execute('''
-        SELECT bp.*, t.name as tenant_name, t.email, p.name as property_name, r.room_number
+        SELECT bp.*, t.name as tenant_name, t.email, t.phone_number, p.name as property_name, r.room_number
         FROM bill_payments bp
         JOIN tenants t ON bp.tenant_id = t.id
         JOIN properties p ON t.property_id = p.id
@@ -2069,76 +2070,90 @@ def send_reminder(payment_id):
         flash('Payment not found or unauthorized', 'danger')
         return redirect(url_for('all_bills'))
     
-    if not payment_data['email']:
-        conn.close()
-        flash('Tenant email not found', 'warning')
-        return redirect(url_for('all_bills'))
+    # Email reminder (existing code)
+    if payment_data['email']:
+        try:
+            # Create email message
+            msg = Message(
+                'Payment Reminder - RentEase',
+                recipients=[payment_data['email']]
+                # cc=['trnvshisth@gmail.com']
+            )
+            
+            # Format the email body with HTML
+            msg.html = f'''
+            <!DOCTYPE html>
+            <html>
+            <head>
+                <style>
+                    body {{ font-family: Arial, sans-serif; line-height: 1.6; color: #000000; }}
+                    .container {{ width: 100%; max-width: 600px; margin: 0 auto; border: 1px solid #dddddd; border-collapse: collapse; }}
+                    .header {{ background-color: #d32f2f; padding: 10px 0; text-align: center; }}
+                    .header img {{ max-width: 150px; height: auto; }}
+                    .content {{ padding: 20px; }}
+                    .footer {{ padding: 20px; text-align: center; font-size: 12px; color: #555555; }}
+                    .button {{ display: inline-block; background-color: #4CAF50; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px; }}
+                </style>
+            </head>
+            <body>
+                <table class="container" cellpadding="0" cellspacing="0" role="presentation">
+                    <!-- Header -->
+                    
+
+                    <!-- Main Content -->
+                    <tr>
+                        <td class="content">
+                            <p>Dear {payment_data['tenant_name']},</p>
+
+                            <p>I hope this email finds you well. This is a friendly reminder regarding your pending payment at <strong>{payment_data['property_name']}</strong>, Room <strong>{payment_data['room_number']}</strong>.</p>
+
+                            <div style="margin: 20px 0; padding: 15px; border: 1px solid #eeeeee; border-left: 4px solid #f44336;">
+                                <h3 style="color: #000000; margin-top: 0;">📊 Payment Details:</h3>
+                                <p style="margin-bottom: 5px;"><strong>Pending Amount:</strong> ₹{payment_data['pending_amount']:.2f}</p>
+                                <p style="margin-bottom: 0;">Please ensure timely payment.</p>
+                            </div>
+
+                            <p>Best regards,<br>
+                            RentEase Team</p>
+                        </td>
+                    </tr>
+
+                    <!-- Footer -->
+                    <tr>
+                        <td class="footer">
+                            <p style="color: #000000;">This is a system-generated e-mail. Please do not reply to this e-mail.</p>
+                            <!-- Placeholder for Footer Image Banner -->
+                            <!-- Example: <img src="YOUR_BANNER_IMAGE_URL" alt="Offer Banner" style="display: block; max-width: 100%; height: auto; margin-top: 20px;"> -->
+                        </td>
+                    </tr>
+                </table>
+            </body>
+            </html>
+            '''
+            
+            # Send the email
+            mail.send(msg)
+            flash('Email reminder sent successfully!', 'success')
+        except Exception as e:
+            print(f"Failed to send email: {str(e)}")
+            flash('Failed to send reminder email', 'danger')
     
-    try:
-        # Create email message
-        msg = Message(
-            'Payment Reminder - RentEase',
-            recipients=[payment_data['email']]
-            # cc=['trnvshisth@gmail.com']
-        )
-        
-        # Format the email body with HTML
-        msg.html = f'''
-        <!DOCTYPE html>
-        <html>
-        <head>
-            <style>
-                body {{ font-family: Arial, sans-serif; line-height: 1.6; color: #000000; }}
-                .container {{ width: 100%; max-width: 600px; margin: 0 auto; border: 1px solid #dddddd; border-collapse: collapse; }}
-                .header {{ background-color: #d32f2f; padding: 10px 0; text-align: center; }}
-                .header img {{ max-width: 150px; height: auto; }}
-                .content {{ padding: 20px; }}
-                .footer {{ padding: 20px; text-align: center; font-size: 12px; color: #555555; }}
-                .button {{ display: inline-block; background-color: #4CAF50; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px; }}
-            </style>
-        </head>
-        <body>
-            <table class="container" cellpadding="0" cellspacing="0" role="presentation">
-                <!-- Header -->
-                
-
-                <!-- Main Content -->
-                <tr>
-                    <td class="content">
-                        <p>Dear {payment_data['tenant_name']},</p>
-
-                        <p>I hope this email finds you well. This is a friendly reminder regarding your pending payment at <strong>{payment_data['property_name']}</strong>, Room <strong>{payment_data['room_number']}</strong>.</p>
-
-                        <div style="margin: 20px 0; padding: 15px; border: 1px solid #eeeeee; border-left: 4px solid #f44336;">
-                            <h3 style="color: #000000; margin-top: 0;">📊 Payment Details:</h3>
-                            <p style="margin-bottom: 5px;"><strong>Pending Amount:</strong> ₹{payment_data['pending_amount']:.2f}</p>
-                            <p style="margin-bottom: 0;">Please ensure timely payment.</p>
-                        </div>
-
-                        <p>Best regards,<br>
-                        RentEase Team</p>
-                    </td>
-                </tr>
-
-                <!-- Footer -->
-                <tr>
-                    <td class="footer">
-                        <p style="color: #000000;">This is a system-generated e-mail. Please do not reply to this e-mail.</p>
-                        <!-- Placeholder for Footer Image Banner -->
-                        <!-- Example: <img src="YOUR_BANNER_IMAGE_URL" alt="Offer Banner" style="display: block; max-width: 100%; height: auto; margin-top: 20px;"> -->
-                    </td>
-                </tr>
-            </table>
-        </body>
-        </html>
-        '''
-        
-        # Send the email
-        mail.send(msg)
-        flash('Reminder sent successfully!', 'success')
-    except Exception as e:
-        print(f"Failed to send email: {str(e)}")
-        flash('Failed to send reminder email', 'danger')
+    send_whatsapp_reminder = False
+    # WhatsApp reminder
+    if payment_data['phone_number'] and send_whatsapp_reminder:
+        try:
+            phone_number = payment_data['phone_number']
+            # Ensure phone number is in international format (e.g., 91xxxxxxxxxx)
+            if not phone_number.startswith("+"):
+                phone_number = "91" + phone_number  # Change '91' to your country code if needed
+            wa_response = send_whatsapp_message(phone_number)
+            if wa_response.get("messages"):
+                flash('WhatsApp reminder sent successfully!', 'success')
+            else:
+                flash(f"Failed to send WhatsApp reminder: {wa_response}", 'warning')
+        except Exception as e:
+            print(f"Failed to send WhatsApp message: {str(e)}")
+            flash('Failed to send WhatsApp reminder', 'danger')
     
     conn.close()
     return redirect(url_for('all_bills'))
