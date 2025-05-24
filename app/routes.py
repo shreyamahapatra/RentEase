@@ -10,6 +10,10 @@ import pandas as pd
 import io
 from app.drive_utils import upload_file, get_file_url, find_or_create_folder
 
+# Create uploads directory if it doesn't exist
+UPLOADS_DIR = os.path.join('app', 'static', 'uploads')
+os.makedirs(UPLOADS_DIR, exist_ok=True)
+
 def get_db():
     conn = sqlite3.connect('rentease.db')
     conn.row_factory = sqlite3.Row
@@ -1192,7 +1196,7 @@ def add_room(property_id):
             
             # Save file temporarily
             temp_filename = f"temp_room_media_{property_id}_{room_number}_{int(time.time())}"
-            temp_path = os.path.join('app/static/uploads', temp_filename)
+            temp_path = os.path.join(UPLOADS_DIR, temp_filename)
             print("Saving file to temp path:", temp_path)
             try:
                 room_media.save(temp_path)
@@ -2200,7 +2204,7 @@ def edit_room(room_id):
             
             # Save file temporarily
             temp_filename = f"temp_room_media_{room_id}_{int(time.time())}"
-            temp_path = os.path.join('app/static/uploads', temp_filename)
+            temp_path = os.path.join(UPLOADS_DIR, temp_filename)
             room_media.save(temp_path)
             
             # Determine file extension and mime type
