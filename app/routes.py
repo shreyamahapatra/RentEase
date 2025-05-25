@@ -2698,5 +2698,100 @@ def electricity_readings():
         WHERE p.user_id = ?
         ORDER BY er.reading_date DESC
     ''', (session['user_id'],)).fetchall()
+
+    # Get unique months from readings
+    months = sorted(list(set([reading['reading_date'][:7] for reading in readings])), reverse=True)
+
     conn.close()
-    return render_template('electricity_readings.html', readings=readings)
+    return render_template('electricity_readings.html', readings=readings, months=months)
+
+@app.route('/edit-electricity-reading/<int:reading_id>', methods=['POST'])
+def edit_electricity_reading(reading_id):
+    if 'user_id' not in session:
+        flash('Please login to access this page', 'warning')
+        return redirect(url_for('login'))
+
+    conn = get_db()
+    c = conn.cursor()
+
+    # Verify ownership and get current data
+    reading = c.execute('''
+        SELECT er.*, p.user_id
+        FROM electricity_readings er
+        JOIN properties p ON er.property_id = p.id
+        WHERE er.id = ?
+    ''', (reading_id,)).fetchone()
+
+    if not reading or reading['user_id'] != session['user_id']:
+        conn.close()
+        flash('Electricity reading not found or unauthorized', 'danger')
+        return redirect(url_for('electricity_readings'))
+
+    # Get updated data from form
+    previous_reading = request.form.get('previous_reading')
+    current_reading = request.form.get('current_reading')
+    price_per_unit = request.form.get('price_per_unit')
+
+    # Calculate total cost
+    try:
+        prev = float(previous_reading)
+        curr = float(current_reading)
+        price = float(price_per_unit)
+        total_cost = (curr - prev) * price
+        if total_cost < 0:
+            total_cost = 0 # Prevent negative cost
+    except (ValueError, TypeError):
+        flash('Invalid numeric input', 'danger')
+        conn.close()
+        return redirect(url_for('electricity_readings'))
+
+    # Update the reading
+    try:
+        c.execute('''UPDATE electricity_readings
+                    SET previous_reading = ?, current_reading = ?, price_per_unit = ?, total_cost = ?
+                    WHERE id = ?
+                ''', (previous_reading, current_reading, price_per_unit, total_cost, reading_id))
+        conn.commit()
+        flash('Electricity reading updated successfully!', 'success')
+    except Exception as e:
+        conn.rollback()
+        flash(f'Error updating reading: {str(e)}', 'danger')
+    finally:
+        conn.close()
+
+    return redirect(url_for('electricity_readings'))
+
+@app.route('/delete-electricity-reading/<int:reading_id>', methods=['POST'])
+def delete_electricity_reading(reading_id):
+    if 'user_id' not in session:
+        flash('Please login to access this page', 'warning')
+        return redirect(url_for('login'))
+
+    conn = get_db()
+    c = conn.cursor()
+
+    # Verify ownership
+    reading = c.execute('''
+        SELECT er.id, p.user_id
+        FROM electricity_readings er
+        JOIN properties p ON er.property_id = p.id
+        WHERE er.id = ?
+    ''', (reading_id,)).fetchone()
+
+    if not reading or reading['user_id'] != session['user_id']:
+        conn.close()
+        flash('Electricity reading not found or unauthorized', 'danger')
+        return redirect(url_for('electricity_readings'))
+
+    # Delete the reading
+    try:
+        c.execute('DELETE FROM electricity_readings WHERE id = ?', (reading_id,))
+        conn.commit()
+        flash('Electricity reading deleted successfully!', 'success')
+    except Exception as e:
+        conn.rollback()
+        flash(f'Error deleting reading: {str(e)}', 'danger')
+    finally:
+        conn.close()
+
+    return redirect(url_for('electricity_readings'))
