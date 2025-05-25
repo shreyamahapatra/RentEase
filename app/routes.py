@@ -115,6 +115,19 @@ def init_db():
     if 'move_out_date' not in columns:
         c.execute('ALTER TABLE tenants ADD COLUMN move_out_date DATE')
     
+    c.execute('''CREATE TABLE IF NOT EXISTS electricity_readings (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        property_id INTEGER NOT NULL,
+        room_id INTEGER NOT NULL,
+        previous_reading REAL NOT NULL,
+        current_reading REAL NOT NULL,
+        price_per_unit REAL NOT NULL,
+        total_cost REAL NOT NULL,
+        reading_date DATE DEFAULT (DATE('now')),
+        FOREIGN KEY (property_id) REFERENCES properties(id),
+        FOREIGN KEY (room_id) REFERENCES rooms(id)
+    )''')
+    
     conn.commit()
     conn.close()
 
@@ -192,7 +205,17 @@ def index():
             c.execute('''
                 SELECT 
                     COALESCE(SUM(bp.amount), 0) as paid_amount,
-                    SUM(rc.rent + rc.electricity_charge + rc.water_charge) as expected_total
+                    SUM(rc.rent + 
+                        COALESCE((
+                            SELECT er.total_cost 
+                            FROM electricity_readings er
+                            WHERE er.property_id = t.property_id
+                            AND er.room_id = t.room_id
+                            AND strftime('%Y', er.reading_date) = ? 
+                            AND strftime('%m', er.reading_date) = ?
+                            ORDER BY er.reading_date DESC LIMIT 1
+                        ), rc.electricity_charge) 
+                        + rc.water_charge) as expected_total
                 FROM tenants t
                 JOIN rooms r ON t.room_id = r.id
                 JOIN properties p ON r.property_id = p.id
@@ -200,45 +223,83 @@ def index():
                 LEFT JOIN bill_payments bp ON t.id = bp.tenant_id 
                     AND strftime('%Y', bp.payment_date) = ? 
                     AND strftime('%m', bp.payment_date) = ?
-                WHERE p.user_id = ?
-            ''', (str(year), f"{month:02d}", session['user_id']))
-            
+                WHERE p.user_id = ? AND t.move_out_date IS NULL
+            ''', (str(year), f"{month:02d}", str(year), f"{month:02d}", session['user_id']))
             result = c.fetchone()
+
+            c.execute('''
+                SELECT 
+                    SUM(rc.rent + 
+                        COALESCE((
+                            SELECT er.total_cost 
+                            FROM electricity_readings er
+                            WHERE er.property_id = t.property_id
+                            AND er.room_id = t.room_id
+                            AND strftime('%Y', er.reading_date) = ? 
+                            AND strftime('%m', er.reading_date) = ?
+                            ORDER BY er.reading_date DESC LIMIT 1
+                        ), rc.electricity_charge) 
+                        + rc.water_charge) as expected_total
+                FROM tenants t
+                JOIN rooms r ON t.room_id = r.id
+                JOIN properties p ON r.property_id = p.id
+                JOIN room_configurations rc ON r.room_config_id = rc.id
+                WHERE p.user_id = ? AND t.move_out_date IS NULL
+            ''', (str(year), f"{month:02d}", session['user_id']))
+            result2 = c.fetchone()
             monthly_collections.insert(0, result['paid_amount'] if result else 0)
-            monthly_expected.insert(0, result['expected_total'] if result else 0)
+            monthly_expected.insert(0, result2['expected_total'] if result2 else 0)
         
         # Calculate property-wise collections
         property_collections = []
         for property in properties:
             c.execute('''
                 SELECT 
-                    COALESCE(SUM(bp.amount), 0) as collected,
-                    SUM(rc.rent + rc.electricity_charge + rc.water_charge) as expected
+                    COALESCE(SUM(bp.amount), 0) as collected
                 FROM tenants t
                 JOIN rooms r ON t.room_id = r.id
                 JOIN properties p ON r.property_id = p.id
                 JOIN room_configurations rc ON r.room_config_id = rc.id
                 LEFT JOIN bill_payments bp ON t.id = bp.tenant_id 
                     AND strftime('%Y-%m', bp.payment_date) = strftime('%Y-%m', 'now')
-                WHERE t.property_id = ?
+                WHERE t.property_id = ? AND t.move_out_date IS NULL
                 GROUP BY t.property_id
             ''', (property[0],))
-            
             result = c.fetchone()
+
+            c.execute('''
+                SELECT 
+                    SUM(rc.rent + 
+                        COALESCE((
+                            SELECT er.total_cost 
+                            FROM electricity_readings er
+                            WHERE er.property_id = t.property_id
+                            AND er.room_id = t.room_id
+                            AND strftime('%Y-%m', er.reading_date) = strftime('%Y-%m', 'now')
+                            ORDER BY er.reading_date DESC LIMIT 1
+                        ), rc.electricity_charge) 
+                        + rc.water_charge) as expected
+                FROM tenants t
+                JOIN rooms r ON t.room_id = r.id
+                JOIN properties p ON r.property_id = p.id
+                JOIN room_configurations rc ON r.room_config_id = rc.id
+                WHERE t.property_id = ? AND t.move_out_date IS NULL
+                GROUP BY t.property_id
+            ''', (property[0],))
+            result2 = c.fetchone()
+            print(result['collected'])
             if result:
                 collected = result['collected']
-                expected = result['expected']
+                expected = result2['expected']
                 pending = expected - collected
                 collection_rate = (collected / expected * 100) if expected > 0 else 0
-                
                 property_collections.append({
                     'name': property[1],
                     'expected': expected,
                     'collected': collected,
                     'pending': pending,
-                    'collection_rate': round(collection_rate, 1)
+                    'collection_rate': f'{collection_rate:.2f}'
                 })
-                
                 total_collection += collected
                 total_pending += pending
                 total_expected += expected
@@ -359,18 +420,18 @@ def add_property():
     if 'user_id' not in session:
         flash('Please login to access this page', 'warning')
         return redirect(url_for('login'))
-
+    
     if request.method == 'POST':
         name = request.form.get('name')
         address = request.form.get('address')
         user_id = session['user_id']
-
+        
         conn = get_db()
         c = conn.cursor()
         c.execute('INSERT INTO properties (name, address, user_id) VALUES (?, ?, ?)',
                  (name, address, user_id))
         property_id = c.lastrowid
-
+        
         # Save default room configurations (1 Room Set and 2 Room Set)
         default_room_types = ['one_room', 'two_room']
         for room_type in default_room_types:
@@ -379,13 +440,13 @@ def add_property():
             electricity_charge = request.form.get(f'{room_type}_electricity')
             water_charge = request.form.get(f'{room_type}_water')
             security_deposit = request.form.get(f'{room_type}_security')
-
+            
             # Only insert if count, rent, etc. are provided (meaning the section was used)
             if room_count or rent or electricity_charge or water_charge or security_deposit:
-                c.execute('''INSERT INTO room_configurations
-                             (property_id, room_type, room_count, rent, electricity_charge, water_charge, security_deposit)
-                             VALUES (?, ?, ?, ?, ?, ?, ?)''',
-                         (property_id, room_type, room_count or 0, rent or 0, electricity_charge or 0, water_charge or 0, security_deposit or 0))
+                c.execute('''INSERT INTO room_configurations 
+                            (property_id, room_type, room_count, rent, electricity_charge, water_charge, security_deposit) 
+                            VALUES (?, ?, ?, ?, ?, ?, ?)''',
+                            (property_id, room_type, room_count or 0, rent or 0, electricity_charge or 0, water_charge or 0, security_deposit or 0))
 
 
         # Save custom room configurations
@@ -419,10 +480,10 @@ def add_property():
                              (property_id, room_type, room_count, rent, electricity_charge, water_charge, security_deposit)
                              VALUES (?, ?, ?, ?, ?, ?, ?)''',
                          (property_id, room_type, room_count or 0, rent or 0, electricity_charge or 0, water_charge or 0, security_deposit or 0))
-
+        
         conn.commit()
         conn.close()
-
+        
         flash('Property and room configurations added successfully!', 'success')
         return redirect(url_for('my_properties'))
     return render_template('add_property.html')
@@ -504,13 +565,13 @@ def add_tenant():
             
             # Insert tenant
             c.execute('''INSERT INTO tenants 
-                        (name, property_id, room_id, phone_number, email, move_in_date, move_out_date, police_verification) 
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)''',
-                     (tenant_name, property_id, room_id, phone_number, email, move_in_date, move_out_date, drive_file_data))
-            
+                            (name, property_id, room_id, phone_number, email, move_in_date, move_out_date, police_verification) 
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?)''',
+                        (tenant_name, property_id, room_id, phone_number, email, move_in_date, move_out_date, drive_file_data))
+        
             # Mark room as unavailable
             c.execute('UPDATE rooms SET is_available = FALSE WHERE id = ?', (room_id,))
-            
+        
             c.execute('COMMIT')
             flash('Tenant added successfully!', 'success')
         except Exception as e:
@@ -693,38 +754,42 @@ def delete_tenant(tenant_id):
 @app.route('/get-rooms')
 def get_rooms():
     property_id = request.args.get('property_id', type=int)
-    rooms = ROOMS.get(property_id, [])
-    return jsonify({'rooms': rooms})
+    conn = get_db()
+    c = conn.cursor()
+    rooms = c.execute('SELECT id, room_number FROM rooms WHERE property_id = ?', (property_id,)).fetchall()
+    conn.close()
+    room_list = [{'id': room['id'], 'number': room['room_number']} for room in rooms]
+    return jsonify({'rooms': room_list})
 
 @app.route('/my-properties')
 def my_properties():
     if 'user_id' not in session:
         flash('Please login to access this page', 'warning')
         return redirect(url_for('login'))
-
+    
     conn = get_db()
     c = conn.cursor()
-
+    
     # Get all properties for the logged-in user with all their room configurations
     properties_data = c.execute('''
-        SELECT p.id, p.name, p.address,
-               rc.id as room_config_id, rc.room_type, rc.room_count,
+        SELECT p.id, p.name, p.address, 
+               rc.id as room_config_id, rc.room_type, rc.room_count, 
                rc.rent, rc.electricity_charge, rc.water_charge, rc.security_deposit
         FROM properties p
         LEFT JOIN room_configurations rc ON p.id = rc.property_id
         WHERE p.user_id = ?
         ORDER BY p.id, rc.room_type -- Order by property and then room type
     ''', (session['user_id'],)).fetchall()
-
+    
     # Format the properties data to group configurations by property
     formatted_properties = []
     current_property = None
-
+    
     for row in properties_data:
         if current_property is None or current_property['id'] != row['id']:
             if current_property is not None:
                 formatted_properties.append(current_property)
-
+            
             current_property = {
                 'id': row['id'],
                 'name': row['name'],
@@ -757,10 +822,10 @@ def edit_property(property_id):
     if 'user_id' not in session:
         flash('Please login to access this page', 'warning')
         return redirect(url_for('login'))
-
+    
     conn = get_db()
     c = conn.cursor()
-
+    
     # Get property and room configuration data for GET request and validation
     property_data = c.execute('''
         SELECT * FROM properties
@@ -776,12 +841,12 @@ def edit_property(property_id):
         # Update property information
         name = request.form.get('name')
         address = request.form.get('address')
-
-        c.execute('''UPDATE properties
-                    SET name = ?, address = ?
+        
+        c.execute('''UPDATE properties 
+                    SET name = ?, address = ? 
                     WHERE id = ? AND user_id = ?''',
                  (name, address, property_id, session['user_id']))
-
+        
         # --- Handle Room Configurations ---
 
         # 1. Update default room configurations (one_room and two_room)
@@ -792,7 +857,7 @@ def edit_property(property_id):
             electricity_charge = request.form.get(f'{room_type}_electricity')
             water_charge = request.form.get(f'{room_type}_water')
             security_deposit = request.form.get(f'{room_type}_security')
-
+            
             # Find the existing configuration for this type and property
             existing_config_id = c.execute('''
                 SELECT id FROM room_configurations
@@ -801,19 +866,19 @@ def edit_property(property_id):
 
             if existing_config_id:
                 # Update existing configuration
-                c.execute('''UPDATE room_configurations
-                            SET room_count = ?, rent = ?, electricity_charge = ?,
+                c.execute('''UPDATE room_configurations 
+                            SET room_count = ?, rent = ?, electricity_charge = ?, 
                                 water_charge = ?, security_deposit = ?
-                            WHERE id = ?''',
-                         (room_count or 0, rent or 0, electricity_charge or 0, water_charge or 0,
-                          security_deposit or 0, existing_config_id[0]))
+                                WHERE id = ?''',
+                             (room_count or 0, rent or 0, electricity_charge or 0, water_charge or 0,
+                              security_deposit or 0, existing_config_id[0]))
             else:
                  # Insert as a new configuration if it doesn't exist (shouldn't happen with current template logic but as a safeguard)
                 if room_count or rent or electricity_charge or water_charge or security_deposit:
-                     c.execute('''INSERT INTO room_configurations
-                                 (property_id, room_type, room_count, rent, electricity_charge, water_charge, security_deposit)
-                                 VALUES (?, ?, ?, ?, ?, ?, ?)''',
-                             (property_id, room_type, room_count or 0, rent or 0, electricity_charge or 0, water_charge or 0, security_deposit or 0))
+                    c.execute('''INSERT INTO room_configurations
+                                (property_id, room_type, room_count, rent, electricity_charge, water_charge, security_deposit)
+                                VALUES (?, ?, ?, ?, ?, ?, ?)''',
+                            (property_id, room_type, room_count or 0, rent or 0, electricity_charge or 0, water_charge or 0, security_deposit or 0))
 
 
         # 2. Handle existing and new custom configurations
@@ -900,7 +965,7 @@ def edit_property(property_id):
 
         flash('Property and room configurations updated successfully!', 'success')
         return redirect(url_for('my_properties'))
-
+    
     # GET request part: Fetch property data and all room configurations
     # This part remains largely the same as before, ensuring all configs are fetched
     # The template logic handles separating default and custom ones for display
@@ -909,7 +974,7 @@ def edit_property(property_id):
         FROM room_configurations
         WHERE property_id = ?
     ''', (property_id,)).fetchall()
-
+    
     # Format room configurations into a dictionary for easy access by type in template
     # And also keep a list for iterating over all configs
     room_data = {}
@@ -929,9 +994,9 @@ def edit_property(property_id):
         # Add all configurations to the list
         all_room_configs_list.append(dict(room)) # Convert Row to dict for consistency
 
-
+    
     conn.close()
-    return render_template('edit_property.html',
+    return render_template('edit_property.html', 
                          property=property_data,
                          room_data=room_data, # For default configs
                          room_configs=all_room_configs_list) # For iterating through all in template
@@ -1033,17 +1098,17 @@ def edit_tenant(tenant_id):
                 flash('Could not create or find Google Drive folder for the property.', 'danger')
                 drive_file_data = current_tenant['police_verification'] # Keep existing on failure
             # --- Google Drive Upload --- END
-
+        
         # Update tenant data
         c.execute('''
-            UPDATE tenants
+            UPDATE tenants 
             SET name = ?, phone_number = ?, email = ?, move_in_date = ?, move_out_date = ?, police_verification = ?
             WHERE id = ?
         ''', (tenant_name, phone_number, email, move_in_date, move_out_date, drive_file_data, tenant_id))
-
+        
         conn.commit()
         conn.close()
-
+        
         flash('Tenant updated successfully!', 'success')
         return redirect(url_for('list_tenants'))
     
@@ -1487,6 +1552,40 @@ def monthly_bills(year, month):
     
     tenants = cursor.fetchall()
     
+    # Patch: If electricity_rate is 0, fetch from electricity_readings for the current month
+    from datetime import datetime
+    current_date = datetime.now()
+    current_month = current_date.month
+    current_year = current_date.year
+    patched_tenants = []
+    for tenant in tenants:
+        electricity_rate = tenant['electricity_rate'] if isinstance(tenant, dict) else tenant[5]
+        if electricity_rate == 0:
+            # Fetch from electricity_readings
+            cursor.execute('''
+                SELECT total_cost FROM electricity_readings
+                WHERE property_id = ? AND room_id = ?
+                  AND strftime('%m', reading_date) = ?
+                  AND strftime('%Y', reading_date) = ?
+                ORDER BY reading_date DESC LIMIT 1
+            ''', (
+                tenant['property_id'] if isinstance(tenant, dict) else tenant[13],
+                tenant['room_number'] if isinstance(tenant, dict) else tenant[2],
+                str(current_month).zfill(2),
+                str(current_year)
+            ))
+            row = cursor.fetchone()
+            if row:
+                # Patch the tuple or dict
+                if isinstance(tenant, dict):
+                    tenant['electricity_rate'] = row['total_cost']
+                else:
+                    tenant = list(tenant)
+                    tenant[5] = row['total_cost']
+                    tenant = tuple(tenant)
+                patched_tenants.append(tenant)
+    tenants = patched_tenants
+    
     # Calculate monthly totals
     monthly_stats = {
         'paid': sum(tenant['paid_amount'] for tenant in tenants),
@@ -1519,7 +1618,13 @@ def all_bills():
             r.room_number,
             rc.rent as rent_amount,
             COALESCE(SUM(bp.amount), 0) as paid_amount,
-            rc.electricity_charge as electricity_rate,
+            COALESCE((
+                SELECT er.total_cost FROM electricity_readings er
+                WHERE er.property_id = t.property_id
+                  AND er.room_id = t.room_id
+                  AND strftime('%Y-%m', er.reading_date) = strftime('%Y-%m', 'now')
+                ORDER BY er.reading_date DESC LIMIT 1
+            ), rc.electricity_charge) as electricity_rate,
             rc.water_charge as water_rate,
             t.id as tenant_id,
             t.move_in_date,
@@ -1528,36 +1633,76 @@ def all_bills():
                 ELSE date(t.move_in_date, 'start of month', '+4 days')
             END as due_date,
             p.id as property_id,
-            (rc.rent + rc.electricity_charge + rc.water_charge) as total_amount,
+            (rc.rent + 
+                COALESCE((
+                    SELECT er.total_cost FROM electricity_readings er
+                    WHERE er.property_id = t.property_id
+                      AND er.room_id = t.room_id
+                      AND strftime('%Y-%m', er.reading_date) = strftime('%Y-%m', 'now')
+                    ORDER BY er.reading_date DESC LIMIT 1
+                ), rc.electricity_charge)
+                + rc.water_charge) as total_amount,
             CASE 
                 WHEN EXISTS (
                     SELECT 1 
                     FROM bill_payments 
                     WHERE tenant_id = t.id 
                     AND strftime('%Y-%m', payment_date) = strftime('%Y-%m', date('now', '-1 month'))
-                ) THEN (rc.rent + rc.electricity_charge + rc.water_charge - COALESCE((
-                    SELECT SUM(amount) 
-                    FROM bill_payments 
-                    WHERE tenant_id = t.id 
-                    AND strftime('%Y-%m', payment_date) = strftime('%Y-%m', date('now', '-1 month'))
-                ), 0))
-                ELSE 0
+                ) THEN ((rc.rent + 
+                    COALESCE((
+                        SELECT er.total_cost FROM electricity_readings er
+                        WHERE er.property_id = t.property_id
+                          AND er.room_id = t.room_id
+                          AND strftime('%Y-%m', er.reading_date) = strftime('%Y-%m', date('now', '-1 month'))
+                        ORDER BY er.reading_date DESC LIMIT 1
+                    ), rc.electricity_charge)
+                    + rc.water_charge) - COALESCE((
+                        SELECT SUM(amount) 
+                        FROM bill_payments 
+                        WHERE tenant_id = t.id 
+                        AND strftime('%Y-%m', payment_date) = strftime('%Y-%m', date('now', '-1 month'))
+                    ), 0))
+                    ELSE 0 
             END as prev_month_pending,
-            (rc.rent + rc.electricity_charge + rc.water_charge - COALESCE(SUM(bp.amount), 0)) as current_month_pending,
-            ((rc.rent + rc.electricity_charge + rc.water_charge - COALESCE(SUM(bp.amount), 0)) + 
+            ((rc.rent + 
+                COALESCE((
+                    SELECT er.total_cost FROM electricity_readings er
+                    WHERE er.property_id = t.property_id
+                      AND er.room_id = t.room_id
+                      AND strftime('%Y-%m', er.reading_date) = strftime('%Y-%m', 'now')
+                    ORDER BY er.reading_date DESC LIMIT 1
+                ), rc.electricity_charge)
+                + rc.water_charge) - COALESCE(SUM(bp.amount), 0)) as current_month_pending,
+            (((rc.rent + 
+                COALESCE((
+                    SELECT er.total_cost FROM electricity_readings er
+                    WHERE er.property_id = t.property_id
+                      AND er.room_id = t.room_id
+                      AND strftime('%Y-%m', er.reading_date) = strftime('%Y-%m', 'now')
+                    ORDER BY er.reading_date DESC LIMIT 1
+                ), rc.electricity_charge)
+                + rc.water_charge) - COALESCE(SUM(bp.amount), 0)) + 
             CASE 
                 WHEN EXISTS (
                     SELECT 1 
                     FROM bill_payments 
                     WHERE tenant_id = t.id 
                     AND strftime('%Y-%m', payment_date) = strftime('%Y-%m', date('now', '-1 month'))
-                ) THEN (rc.rent + rc.electricity_charge + rc.water_charge - COALESCE((
-                    SELECT SUM(amount) 
-                    FROM bill_payments 
-                    WHERE tenant_id = t.id 
-                    AND strftime('%Y-%m', payment_date) = strftime('%Y-%m', date('now', '-1 month'))
-                ), 0))
-                ELSE 0
+                ) THEN ((rc.rent + 
+                    COALESCE((
+                        SELECT er.total_cost FROM electricity_readings er
+                        WHERE er.property_id = t.property_id
+                          AND er.room_id = t.room_id
+                          AND strftime('%Y-%m', er.reading_date) = strftime('%Y-%m', date('now', '-1 month'))
+                        ORDER BY er.reading_date DESC LIMIT 1
+                    ), rc.electricity_charge)
+                    + rc.water_charge) - COALESCE((
+                        SELECT SUM(amount) 
+                        FROM bill_payments 
+                        WHERE tenant_id = t.id 
+                        AND strftime('%Y-%m', payment_date) = strftime('%Y-%m', date('now', '-1 month'))
+                    ), 0))
+                    ELSE 0 
             END) as total_pending
         FROM tenants t
         JOIN rooms r ON t.room_id = r.id
@@ -1623,7 +1768,7 @@ def all_bills():
     today_date = today.strftime('%Y-%m-%d')
     
     conn.close()
-    return render_template('all_bills.html',
+    return render_template('all_bills.html', 
                          tenants=tenants,
                          total_stats=total_stats,
                          months=months,
@@ -1737,13 +1882,29 @@ def add_payment():
         print("Error: Tenant not found")
         return jsonify({'error': 'Tenant not found'}), 404
     
-    # Calculate total amount for the month
-    total_amount = float(tenant[2]) + float(tenant[3]) + float(tenant[4])  # rent + electricity + water
-    
-    # Get existing payments for this month
+    # Parse payment_date to get month and year before using them
     payment_date_obj = datetime.strptime(payment_date, '%Y-%m-%d')
     month = payment_date_obj.month
     year = payment_date_obj.year
+
+    # Calculate total amount for the month
+    # Fetch the latest electricity reading for the tenant's property/room for the payment month
+    property_id_room = c.execute('SELECT property_id, room_id FROM tenants WHERE id = ?', (tenant_id,)).fetchone()
+    electricity_cost = None
+    if property_id_room:
+        property_id, room_id = property_id_room
+        electricity_row = c.execute('''
+            SELECT total_cost FROM electricity_readings
+            WHERE property_id = ? AND room_id = ?
+              AND strftime('%Y', reading_date) = ?
+              AND strftime('%m', reading_date) = ?
+            ORDER BY reading_date DESC LIMIT 1
+        ''', (property_id, room_id, str(year), str(month).zfill(2))).fetchone()
+        if electricity_row:
+            electricity_cost = float(electricity_row[0])
+    if electricity_cost is None:
+        electricity_cost = float(tenant[3])  # fallback to static charge
+    total_amount = float(tenant[2]) + electricity_cost + float(tenant[4])  # rent + electricity + water
     
     print("\nAdding Payment Details:")
     print(f"Tenant: {tenant[1]}")
@@ -2088,17 +2249,33 @@ def send_reminder(payment_id):
                 <style>
                     body {{ font-family: Arial, sans-serif; line-height: 1.6; color: #000000; }}
                     .container {{ width: 100%; max-width: 600px; margin: 0 auto; border: 1px solid #dddddd; border-collapse: collapse; }}
-                    .header {{ background-color: #d32f2f; padding: 10px 0; text-align: center; }}
+                    .header {{ background-color: #d32f2f; padding: 20px 0; text-align: center; }}
                     .header img {{ max-width: 150px; height: auto; }}
                     .content {{ padding: 20px; }}
-                    .footer {{ padding: 20px; text-align: center; font-size: 12px; color: #555555; }}
+                    .footer {{ padding: 20px; text-align: center; font-size: 12px; color: #555555; background-color: #f8f9fa; border-top: 1px solid #dddddd; }}
                     .button {{ display: inline-block; background-color: #4CAF50; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px; }}
+                    .services-section {{ margin: 20px 0; padding: 15px; background-color: #f8f9fa; border-radius: 5px; }}
+                    .services-section h3 {{ color: #d32f2f; margin-bottom: 15px; }}
+                    .services-list {{ list-style: none; padding: 0; }}
+                    .services-list li {{ margin-bottom: 10px; }}
+                    .services-list i {{ color: #d32f2f; margin-right: 10px; }}
+                    .links-section {{ margin: 20px 0; padding: 15px; background-color: #f8f9fa; border-radius: 5px; }}
+                    .links-section h3 {{ color: #d32f2f; margin-bottom: 15px; }}
+                    .links-list {{ list-style: none; padding: 0; }}
+                    .links-list li {{ margin-bottom: 10px; }}
+                    .links-list a {{ color: #d32f2f; text-decoration: none; }}
+                    .links-list a:hover {{ text-decoration: underline; }}
                 </style>
             </head>
             <body>
                 <table class="container" cellpadding="0" cellspacing="0" role="presentation">
                     <!-- Header -->
-                    
+                    <tr>
+                        <td class="header">
+                            <h1 style="color: white; margin: 0;">RentEase</h1>
+                            <p style="color: white; margin: 5px 0 0 0;">Property Management Made Easy</p>
+                        </td>
+                    </tr>
 
                     <!-- Main Content -->
                     <tr>
@@ -2113,6 +2290,30 @@ def send_reminder(payment_id):
                                 <p style="margin-bottom: 0;">Please ensure timely payment.</p>
                             </div>
 
+                            <!-- Services Section -->
+                            <div class="services-section">
+                                <h3>Our Services</h3>
+                                <ul class="services-list">
+                                    <li><i class="bi bi-house"></i> Property Management</li>
+                                    <li><i class="bi bi-cash-coin"></i> Rent Collection</li>
+                                    <li><i class="bi bi-lightning-charge"></i> Utility Bill Management</li>
+                                    <li><i class="bi bi-tools"></i> Maintenance Support</li>
+                                    <li><i class="bi bi-shield-check"></i> Security Services</li>
+                                </ul>
+                            </div>
+
+                            <!-- Useful Links Section -->
+                            <div class="links-section">
+                                <h3>Useful Links</h3>
+                                <ul class="links-list">
+                                    <li><a href="#">Tenant Portal</a> - Access your account and manage payments</li>
+                                    <li><a href="#">Payment History</a> - View your payment records</li>
+                                    <li><a href="#">Maintenance Request</a> - Submit maintenance requests</li>
+                                    <li><a href="#">FAQs</a> - Find answers to common questions</li>
+                                    <li><a href="#">Contact Support</a> - Get help when you need it</li>
+                                </ul>
+                            </div>
+
                             <p>Best regards,<br>
                             RentEase Team</p>
                         </td>
@@ -2121,9 +2322,10 @@ def send_reminder(payment_id):
                     <!-- Footer -->
                     <tr>
                         <td class="footer">
-                            <p style="color: #000000;">This is a system-generated e-mail. Please do not reply to this e-mail.</p>
-                            <!-- Placeholder for Footer Image Banner -->
-                            <!-- Example: <img src="YOUR_BANNER_IMAGE_URL" alt="Offer Banner" style="display: block; max-width: 100%; height: auto; margin-top: 20px;"> -->
+                            <p style="margin: 0 0 10px 0;">© 2024 RentEase. All rights reserved.</p>
+                            <p style="margin: 0 0 5px 0;"><strong>Address:</strong> 128/3, Kilokari, New Delhi - 110014</p>
+                            <p style="margin: 0 0 5px 0;"><strong>Email:</strong> rentease.in@gmail.com</p>
+                            <p style="margin: 0;">This is an automated message, please do not reply directly to this email.</p>
                         </td>
                     </tr>
                 </table>
@@ -2456,3 +2658,45 @@ def move_out_tenant(tenant_id):
         conn.close()
     
     return redirect(url_for('list_tenants'))
+
+@app.route('/add-electricity-reading', methods=['POST'])
+def add_electricity_reading():
+    if 'user_id' not in session:
+        flash('Please login to access this page', 'warning')
+        return redirect(url_for('login'))
+    
+    property_id = request.form.get('property_id')
+    room_id = request.form.get('room_id')
+    previous_reading = request.form.get('previous_reading')
+    current_reading = request.form.get('current_reading')
+    price_per_unit = request.form.get('price_per_unit')
+    total_cost = request.form.get('total_cost')
+    
+    print("Electricity reading data:", property_id, room_id, previous_reading, current_reading, price_per_unit, total_cost)
+    conn = get_db()
+    c = conn.cursor()
+    c.execute('''INSERT INTO electricity_readings (property_id, room_id, previous_reading, current_reading, price_per_unit, total_cost)
+                 VALUES (?, ?, ?, ?, ?, ?)''',
+              (property_id, room_id, previous_reading, current_reading, price_per_unit, total_cost))
+    conn.commit()
+    conn.close()
+    flash('Electricity reading added successfully!', 'success')
+    return redirect(url_for('index'))
+
+@app.route('/electricity-readings')
+def electricity_readings():
+    if 'user_id' not in session:
+        flash('Please login to access this page', 'warning')
+        return redirect(url_for('login'))
+    conn = get_db()
+    c = conn.cursor()
+    readings = c.execute('''
+        SELECT er.id, p.name as property_name, r.room_number, er.previous_reading, er.current_reading, er.price_per_unit, er.total_cost, er.reading_date
+        FROM electricity_readings er
+        JOIN properties p ON er.property_id = p.id
+        JOIN rooms r ON er.room_id = r.id
+        WHERE p.user_id = ?
+        ORDER BY er.reading_date DESC
+    ''', (session['user_id'],)).fetchall()
+    conn.close()
+    return render_template('electricity_readings.html', readings=readings)

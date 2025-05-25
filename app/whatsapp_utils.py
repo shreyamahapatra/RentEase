@@ -17,7 +17,7 @@ def send_whatsapp_message(to_number, template_name="hello_world", language_code=
       }
     })
     headers = {
-      'Authorization': 'Bearer EAAJwUCHV0J0BO4wZAADSMhIuZBxnt8Dp2iKUpQidEZBUufbTZC77noQAaEKQBobTEy7jfD69cCqE1v8FTNfqW8XGafphQfX5dhJ02h3kE8AZChVurMQ97VqjG7ZCwKCyPQEZA2D4H0OgvXIBwwUs1ZArMyhgIbcOUZAzxZBc8mHc3v2ULyrdLWE6owO403J86i7YlgUE0VNhpZCn7t7DNnTZCfpgKb5gQOvbkni3BQQZD',
+      'Authorization': 'Bearer ',
       'Content-Type': 'application/json'
     }
     response = requests.post(url, headers=headers, data=payload)

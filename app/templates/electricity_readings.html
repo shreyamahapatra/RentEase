@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta content="width=device-width, initial-scale=1.0" name="viewport">
+  <title>Electricity Readings - RentEase</title>
+  <meta name="description" content="">
+  <meta name="keywords" content="">
+
+  <!-- Favicons -->
+  <link href="{{ url_for('static', filename='assets/img/favicon.png') }}" rel="icon">
+  <link href="{{ url_for('static', filename='assets/img/apple-touch-icon.png') }}" rel="apple-touch-icon">
+
+  <!-- Fonts -->
+  <link href="https://fonts.googleapis.com" rel="preconnect">
+  <link href="https://fonts.gstatic.com" rel="preconnect" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Roboto:ital,wght@0,100;0,300;0,400;0,500;0,700;0,900;1,100;1,300;1,400;1,500;1,700;1,900&family=Poppins:ital,wght@0,100;0,200;0,300;0,400;0,500;0,600;0,700;0,800;0,900;1,100;1,200;1,300;1,400;1,500;1,600;1,700;1,800;1,900&family=Raleway:ital,wght@0,100;0,200;0,300;0,400;0,500;0,600;0,700;0,800;0,900;1,100;1,200;1,300;1,400;1,500;1,600;1,700;1,800;1,900&display=swap" rel="stylesheet">
+
+  <!-- Vendor CSS Files -->
+  <link href="{{ url_for('static', filename='assets/vendor/bootstrap/css/bootstrap.min.css') }}" rel="stylesheet">
+  <link href="{{ url_for('static', filename='assets/vendor/bootstrap-icons/bootstrap-icons.css') }}" rel="stylesheet">
+  <link href="{{ url_for('static', filename='assets/vendor/aos/aos.css') }}" rel="stylesheet">
+
+  <!-- Main CSS File -->
+  <link href="{{ url_for('static', filename='assets/css/main.css') }}" rel="stylesheet">
+</head>
+<body class="index-page">
+  <header id="header" class="header d-flex align-items-center fixed-top">
+    <div class="container position-relative d-flex align-items-center justify-content-between">
+      <a href="{{ url_for('index') }}" class="logo d-flex align-items-center me-auto me-xl-0">
+        <h1 class="sitename">RentEase</h1><span>.</span>
+      </a>
+      <nav id="navmenu" class="navmenu">
+        <ul>
+          <li><a href="{{ url_for('index') }}#hero">Home</a></li>
+          <li><a href="{{ url_for('index') }}#properties">Properties</a></li>
+          <li><a href="{{ url_for('list_tenants') }}">Tenants</a></li>
+          <li><a href="{{ url_for('index') }}#bills">Bills</a></li>
+          <!-- <li><a href="{{ url_for('index') }}#inventory">Inventory</a></li> -->
+          <li class="dropdown">
+            <a href="#"><span>Reports</span> <i class="bi bi-chevron-down toggle-dropdown"></i></a>
+            <ul>
+              <li><a href="{{ url_for('index') }}#rent-reports">Rent Collection</a></li>
+              <li><a href="{{ url_for('index') }}#maintenance-reports">Maintenance</a></li>
+              <!-- <li><a href="{{ url_for('index') }}#inventory-reports">Inventory Status</a></li> -->
+            </ul>
+          </li>
+          <li><a href="{{ url_for('index') }}#contact">Contact</a></li>
+        </ul>
+        <i class="mobile-nav-toggle d-xl-none bi bi-list"></i>
+      </nav>
+      {% if session.get('user_id') %}
+        <a class="btn-getstarted" href="{{ url_for('logout') }}">Logout</a>
+      {% else %}
+        <a class="btn-getstarted me-1" href="{{ url_for('login') }}">Login</a>
+        <a class="btn-getstarted" href="{{ url_for('register') }}">Register</a>
+      {% endif %}
+    </div>
+  </header>
+  <main class="main" style="margin-top: 100px;">
+    <div class="container mt-5">
+      {% with messages = get_flashed_messages(with_categories=true) %}
+        {% if messages %}
+          {% for category, message in messages %}
+            <div class="alert alert-{{ category }} alert-dismissible fade show" role="alert">
+              {{ message }}
+              <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+            </div>
+          {% endfor %}
+        {% endif %}
+      {% endwith %}
+      <div class="row mb-4">
+        <div class="col-md-8">
+          <h2>Electricity Readings</h2>
+          <p class="text-muted">View and filter all electricity meter readings for your properties.</p>
+        </div>
+        <div class="col-md-4 text-md-end">
+          <a href="{{ url_for('index') }}#bills" class="btn btn-outline-secondary"><i class="bi bi-arrow-left me-2"></i>Back to Bills</a>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-body">
+          <div class="row mb-3">
+            <div class="col-md-4">
+              <label for="propertyFilter" class="form-label">Filter by Property</label>
+              <select id="propertyFilter" class="form-select">
+                <option value="">All Properties</option>
+                {% for property in readings|map(attribute='property_name')|unique %}
+                  <option value="{{ property }}">{{ property }}</option>
+                {% endfor %}
+              </select>
+            </div>
+          </div>
+          <div class="table-responsive">
+            <table class="table table-hover" id="readingsTable">
+              <thead>
+                <tr>
+                  <th>Property</th>
+                  <th>Room</th>
+                  <th>Previous Reading</th>
+                  <th>Current Reading</th>
+                  <th>Price/Unit</th>
+                  <th>Total Cost</th>
+                  <th>Date</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for reading in readings %}
+                <tr data-property="{{ reading['property_name'] }}">
+                  <td>{{ reading['property_name'] }}</td>
+                  <td>{{ reading['room_number'] }}</td>
+                  <td>{{ reading['previous_reading'] }}</td>
+                  <td>{{ reading['current_reading'] }}</td>
+                  <td>₹{{ reading['price_per_unit'] }}</td>
+                  <td class="fw-bold">₹{{ reading['total_cost'] }}</td>
+                  <td>{{ reading['reading_date'] }}</td>
+                </tr>
+                {% else %}
+                <tr><td colspan="7" class="text-center text-muted">No readings found.</td></tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+  </main>
+  <script src="{{ url_for('static', filename='assets/vendor/bootstrap/js/bootstrap.bundle.min.js') }}"></script>
+  <script>
+    document.addEventListener('DOMContentLoaded', function() {
+      const propertyFilter = document.getElementById('propertyFilter');
+      const tableRows = document.querySelectorAll('#readingsTable tbody tr');
+      propertyFilter.addEventListener('change', function() {
+        const selected = this.value;
+        tableRows.forEach(row => {
+          if (!selected || row.getAttribute('data-property') === selected) {
+            row.style.display = '';
+          } else {
+            row.style.display = 'none';
+          }
+        });
+      });
+    });
+  </script>
+</body>
+</html> 
