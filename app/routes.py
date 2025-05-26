@@ -204,7 +204,7 @@ def index():
             # Get monthly totals
             c.execute('''
                 SELECT 
-                    COALESCE(SUM(bp.amount), 0) as paid_amount,
+                    COALESCE(SUM(CASE WHEN bp.payment_mode != 'penalty' THEN bp.amount ELSE 0 END), 0) as paid_amount,
                     SUM(rc.rent + 
                         COALESCE((
                             SELECT er.total_cost 
@@ -255,7 +255,7 @@ def index():
         for property in properties:
             c.execute('''
                 SELECT 
-                    COALESCE(SUM(bp.amount), 0) as collected
+                    COALESCE(SUM(CASE WHEN bp.payment_mode != 'penalty' THEN bp.amount ELSE 0 END), 0) as collected
                 FROM tenants t
                 JOIN rooms r ON t.room_id = r.id
                 JOIN properties p ON r.property_id = p.id
@@ -287,11 +287,45 @@ def index():
                 GROUP BY t.property_id
             ''', (property[0],))
             result2 = c.fetchone()
-            if result is not None and result2 is not None:
-                print(result['collected'])
+
+            # Calculate pending using current month's data
+            c.execute('''
+                SELECT 
+                    SUM(CASE 
+                        WHEN EXISTS (
+                            SELECT 1 
+                            FROM bill_payments 
+                            WHERE tenant_id = t.id 
+                            AND strftime('%Y-%m', payment_date) = strftime('%Y-%m', 'now')
+                        ) THEN ((rc.rent + 
+                            COALESCE((
+                                SELECT er.total_cost FROM electricity_readings er
+                                WHERE er.property_id = t.property_id
+                                AND er.room_id = t.room_id
+                                AND strftime('%Y-%m', er.reading_date) = strftime('%Y-%m', 'now')
+                                ORDER BY er.reading_date DESC LIMIT 1
+                            ), rc.electricity_charge)
+                            + rc.water_charge) - COALESCE((
+                                SELECT SUM(amount) 
+                                FROM bill_payments 
+                                WHERE tenant_id = t.id 
+                                AND strftime('%Y-%m', payment_date) = strftime('%Y-%m', 'now')
+                            ), 0))
+                        ELSE 0 
+                    END) as pending
+                FROM tenants t
+                JOIN rooms r ON t.room_id = r.id
+                JOIN properties p ON r.property_id = p.id
+                JOIN room_configurations rc ON r.room_config_id = rc.id
+                WHERE t.property_id = ? AND t.move_out_date IS NULL
+                GROUP BY t.property_id
+            ''', (property[0],))
+            result3 = c.fetchone()
+
+            if result is not None and result2 is not None and result3 is not None:
                 collected = result['collected']
                 expected = result2['expected']
-                pending = expected - collected
+                pending = result3['pending']
                 collection_rate = (collected / expected * 100) if expected > 0 else 0
                 property_collections.append({
                     'name': property[1],
@@ -1617,7 +1651,7 @@ def all_bills():
             t.name as tenant_name,
             r.room_number,
             rc.rent as rent_amount,
-            COALESCE(SUM(bp.amount), 0) as paid_amount,
+            COALESCE(SUM(CASE WHEN bp.payment_mode != 'penalty' THEN bp.amount ELSE 0 END), 0) as paid_amount,
             COALESCE((
                 SELECT er.total_cost FROM electricity_readings er
                 WHERE er.property_id = t.property_id
