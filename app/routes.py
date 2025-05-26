@@ -287,8 +287,8 @@ def index():
                 GROUP BY t.property_id
             ''', (property[0],))
             result2 = c.fetchone()
-            print(result['collected'])
-            if result:
+            if result is not None and result2 is not None:
+                print(result['collected'])
                 collected = result['collected']
                 expected = result2['expected']
                 pending = expected - collected
@@ -573,7 +573,7 @@ def add_tenant():
             c.execute('UPDATE rooms SET is_available = FALSE WHERE id = ?', (room_id,))
         
             c.execute('COMMIT')
-            flash('Tenant added successfully!', 'success')
+            # flash('Tenant added successfully!', 'success')
         except Exception as e:
             c.execute('ROLLBACK')
             flash(f'Error adding tenant: {str(e)}', 'danger')
