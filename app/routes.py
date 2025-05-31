@@ -261,7 +261,7 @@ def index():
                 JOIN properties p ON r.property_id = p.id
                 JOIN room_configurations rc ON r.room_config_id = rc.id
                 LEFT JOIN bill_payments bp ON t.id = bp.tenant_id 
-                    AND strftime('%Y-%m', bp.payment_date) = strftime('%Y-%m', 'now')
+                    AND strftime('%Y-%m', bp.payment_date) = strftime('%Y-%m', 'now', 'localtime')
                 WHERE t.property_id = ? AND t.move_out_date IS NULL
                 GROUP BY t.property_id
             ''', (property[0],))
@@ -275,7 +275,7 @@ def index():
                             FROM electricity_readings er
                             WHERE er.property_id = t.property_id
                             AND er.room_id = t.room_id
-                            AND strftime('%Y-%m', er.reading_date) = strftime('%Y-%m', 'now')
+                            AND strftime('%Y-%m', er.reading_date) = strftime('%Y-%m', 'now', 'localtime')
                             ORDER BY er.reading_date DESC LIMIT 1
                         ), rc.electricity_charge) 
                         + rc.water_charge) as expected
@@ -296,20 +296,20 @@ def index():
                             SELECT 1 
                             FROM bill_payments 
                             WHERE tenant_id = t.id 
-                            AND strftime('%Y-%m', payment_date) = strftime('%Y-%m', 'now')
+                            AND strftime('%Y-%m', payment_date) = strftime('%Y-%m', 'now', 'localtime')
                         ) THEN ((rc.rent + 
                             COALESCE((
                                 SELECT er.total_cost FROM electricity_readings er
                                 WHERE er.property_id = t.property_id
                                 AND er.room_id = t.room_id
-                                AND strftime('%Y-%m', er.reading_date) = strftime('%Y-%m', 'now')
+                                AND strftime('%Y-%m', er.reading_date) = strftime('%Y-%m', 'now', 'localtime')
                                 ORDER BY er.reading_date DESC LIMIT 1
                             ), rc.electricity_charge)
                             + rc.water_charge) - COALESCE((
                                 SELECT SUM(amount) 
                                 FROM bill_payments 
                                 WHERE tenant_id = t.id 
-                                AND strftime('%Y-%m', payment_date) = strftime('%Y-%m', 'now')
+                                AND strftime('%Y-%m', payment_date) = strftime('%Y-%m', 'now', 'localtime')
                             ), 0))
                         ELSE 0 
                     END) as pending
