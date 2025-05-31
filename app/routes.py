@@ -123,7 +123,7 @@ def init_db():
         current_reading REAL NOT NULL,
         price_per_unit REAL NOT NULL,
         total_cost REAL NOT NULL,
-        reading_date DATE DEFAULT (DATE('now')),
+        reading_date DATE DEFAULT (DATE('now', 'localtime')),
         FOREIGN KEY (property_id) REFERENCES properties(id),
         FOREIGN KEY (room_id) REFERENCES rooms(id)
     )''')
@@ -1673,7 +1673,7 @@ def all_bills():
             rc.rent as rent_amount,
                COALESCE(SUM(CASE 
                 WHEN bp.payment_mode != 'penalty' 
-                AND strftime('%Y-%m', bp.payment_date) = strftime('%Y-%m', 'now')
+                AND strftime('%Y-%m', bp.payment_date) = strftime('%Y-%m', 'now', 'localtime')
                     THEN bp.amount 
                     ELSE 0 
             END), 0) as paid_amount,
@@ -1681,14 +1681,14 @@ def all_bills():
                 SELECT er.total_cost FROM electricity_readings er
                 WHERE er.property_id = t.property_id
                   AND er.room_id = t.room_id
-                  AND strftime('%Y-%m', er.reading_date) = strftime('%Y-%m', 'now')
+                  AND strftime('%Y-%m', er.reading_date) = strftime('%Y-%m', 'now', 'localtime')
                 ORDER BY er.reading_date DESC LIMIT 1
             ), rc.electricity_charge) as electricity_rate,
             rc.water_charge as water_rate,
             t.id as tenant_id,
             t.move_in_date,
             CASE 
-                WHEN t.move_in_date <= date('now') THEN date('now', 'start of month', '+4 days')
+                WHEN t.move_in_date <= date('now', 'localtime') THEN date('now', 'localtime', 'start of month', '+4 days')
                 ELSE date(t.move_in_date, 'start of month', '+4 days')
             END as due_date,
             p.id as property_id,
@@ -1697,7 +1697,7 @@ def all_bills():
                     SELECT er.total_cost FROM electricity_readings er
                     WHERE er.property_id = t.property_id
                       AND er.room_id = t.room_id
-                      AND strftime('%Y-%m', er.reading_date) = strftime('%Y-%m', 'now')
+                      AND strftime('%Y-%m', er.reading_date) = strftime('%Y-%m', 'now', 'localtime')
                     ORDER BY er.reading_date DESC LIMIT 1
                 ), rc.electricity_charge)
                 + rc.water_charge) as total_amount,
@@ -1706,13 +1706,13 @@ def all_bills():
                     SELECT 1 
                     FROM bill_payments 
                     WHERE tenant_id = t.id 
-                    AND strftime('%Y-%m', payment_date) = strftime('%Y-%m', date('now', 'start of month', '-1 month'))
+                    AND strftime('%Y-%m', payment_date) = strftime('%Y-%m', date('now', 'localtime', 'start of month', '-1 month'))
                 ) THEN COALESCE((
                     SELECT pending_amount 
                     FROM bill_payments 
                     WHERE tenant_id = t.id 
-                    AND strftime('%Y-%m', payment_date) = strftime('%Y-%m', date('now', 'start of month', '-1 month'))
-                    ORDER BY payment_date DESC LIMIT 1
+                    AND strftime('%Y-%m', payment_date) = strftime('%Y-%m', date('now', 'localtime', 'start of month', '-1 month'))
+                    ORDER BY id DESC LIMIT 1
                 ), 0)
                 ELSE 0 
             END as prev_month_pending,
@@ -1721,7 +1721,7 @@ def all_bills():
                     SELECT er.total_cost FROM electricity_readings er
                     WHERE er.property_id = t.property_id
                       AND er.room_id = t.room_id
-                      AND strftime('%Y-%m', er.reading_date) = strftime('%Y-%m', 'now')
+                      AND strftime('%Y-%m', er.reading_date) = strftime('%Y-%m', 'now', 'localtime')
                     ORDER BY er.reading_date DESC LIMIT 1
                 ), rc.electricity_charge)
                 + rc.water_charge) + 
@@ -1730,17 +1730,17 @@ def all_bills():
                     SELECT 1 
                     FROM bill_payments 
                     WHERE tenant_id = t.id 
-                    AND strftime('%Y-%m', payment_date) = strftime('%Y-%m', date('now', 'start of month', '-1 month'))
+                    AND strftime('%Y-%m', payment_date) = strftime('%Y-%m', date('now', 'localtime', 'start of month', '-1 month'))
                 ) THEN COALESCE((
                     SELECT pending_amount 
                     FROM bill_payments 
                     WHERE tenant_id = t.id 
-                    AND strftime('%Y-%m', payment_date) = strftime('%Y-%m', date('now', 'start of month', '-1 month'))
-                    ORDER BY payment_date DESC LIMIT 1
+                    AND strftime('%Y-%m', payment_date) = strftime('%Y-%m', date('now', 'localtime', 'start of month', '-1 month'))
+                    ORDER BY payment_date DESC, id DESC LIMIT 1
                 ), 0)
                 ELSE 0 
             END - COALESCE(SUM(CASE 
-                WHEN strftime('%Y-%m', bp.payment_date) = strftime('%Y-%m', 'now')
+                WHEN strftime('%Y-%m', bp.payment_date) = strftime('%Y-%m', 'now', 'localtime')
                     THEN bp.amount 
                     ELSE 0 
             END), 0)) as total_pending
@@ -1749,7 +1749,7 @@ def all_bills():
         JOIN properties p ON r.property_id = p.id
         JOIN room_configurations rc ON r.room_config_id = rc.id
         LEFT JOIN bill_payments bp ON t.id = bp.tenant_id 
-            AND strftime('%Y-%m', bp.payment_date) = strftime('%Y-%m', 'now')
+            AND strftime('%Y-%m', bp.payment_date) = strftime('%Y-%m', 'now', 'localtime')
         WHERE p.user_id = ?
         GROUP BY t.id
         ORDER BY r.room_number
@@ -1784,7 +1784,7 @@ def all_bills():
                     WHERE tenant_id = t.id 
                     AND strftime('%Y', payment_date) = ? 
                     AND strftime('%m', payment_date) = ?
-                    ORDER BY payment_date DESC LIMIT 1
+                    ORDER BY payment_date DESC, id DESC LIMIT 1
                 ), 0) as last_pending_amount
             FROM tenants t
             JOIN rooms r ON t.room_id = r.id
@@ -2053,7 +2053,7 @@ def export_bills():
             rc.water_charge,
             t.move_in_date,
             CASE 
-                WHEN t.move_in_date <= date('now') THEN date('now', 'start of month', '+4 days')
+                WHEN t.move_in_date <= date('now', 'localtime') THEN date('now', 'localtime', 'start of month', '+4 days')
                 ELSE date(t.move_in_date, 'start of month', '+4 days')
             END as due_date
         FROM tenants t
