@@ -2741,19 +2741,29 @@ def add_electricity_reading():
     room_id = request.form.get('room_id')
     previous_reading = request.form.get('previous_reading')
     current_reading = request.form.get('current_reading')
-    price_per_unit = request.form.get('price_per_unit')
+    price_per_unit = request.form.get('price_per_unit', '8')  # Default to 8 if not provided
     total_cost = request.form.get('total_cost')
     
-    print("Electricity reading data:", property_id, room_id, previous_reading, current_reading, price_per_unit, total_cost)
     conn = get_db()
     c = conn.cursor()
+    
+    # If previous reading is not provided, fetch the last reading for this room
+    if not previous_reading:
+        last_reading = c.execute('''
+            SELECT current_reading 
+            FROM electricity_readings 
+            WHERE property_id = ? AND room_id = ? 
+            ORDER BY reading_date DESC LIMIT 1
+        ''', (property_id, room_id)).fetchone()
+        if last_reading:
+            previous_reading = last_reading['current_reading']
+    
     c.execute('''INSERT INTO electricity_readings (property_id, room_id, previous_reading, current_reading, price_per_unit, total_cost, reading_date)
                  VALUES (?, ?, ?, ?, ?, ?, date('now', 'localtime'))''',
               (property_id, room_id, previous_reading, current_reading, price_per_unit, total_cost))
     conn.commit()
     conn.close()
-    # flash('Electricity reading added successfully!', 'success')
-    return redirect(url_for('index', _anchor='bills'))
+    return redirect(url_for('electricity_readings'))
 
 @app.route('/electricity-readings')
 def electricity_readings():
@@ -2774,8 +2784,11 @@ def electricity_readings():
     # Get unique months from readings
     months = sorted(list(set([reading['reading_date'][:7] for reading in readings])), reverse=True)
 
+    # Get all properties for the user
+    properties = c.execute('SELECT id, name FROM properties WHERE user_id = ?', (session['user_id'],)).fetchall()
+
     conn.close()
-    return render_template('electricity_readings.html', readings=readings, months=months)
+    return render_template('electricity_readings.html', readings=readings, months=months, properties=properties)
 
 @app.route('/edit-electricity-reading/<int:reading_id>', methods=['POST'])
 def edit_electricity_reading(reading_id):
@@ -2867,3 +2880,38 @@ def delete_electricity_reading(reading_id):
         conn.close()
 
     return redirect(url_for('electricity_readings'))
+
+@app.route('/get-previous-reading')
+def get_previous_reading():
+    if 'user_id' not in session:
+        return jsonify({'error': 'Not logged in'}), 401
+    
+    property_id = request.args.get('property_id')
+    room_id = request.args.get('room_id')
+    
+    if not property_id or not room_id:
+        return jsonify({'error': 'Missing property_id or room_id'}), 400
+    
+    conn = get_db()
+    c = conn.cursor()
+    
+    # Get the last reading for this room
+    last_reading = c.execute('''
+        SELECT current_reading, price_per_unit
+        FROM electricity_readings 
+        WHERE property_id = ? AND room_id = ? 
+        ORDER BY reading_date DESC LIMIT 1
+    ''', (property_id, room_id)).fetchone()
+    
+    conn.close()
+    
+    if last_reading:
+        return jsonify({
+            'previous_reading': last_reading['current_reading'],
+            'price_per_unit': last_reading['price_per_unit'] or 8
+        })
+    else:
+        return jsonify({
+            'previous_reading': 0,
+            'price_per_unit': 8
+        })
