@@ -477,10 +477,10 @@ def add_property():
             
             # Only insert if count, rent, etc. are provided (meaning the section was used)
             if room_count or rent or electricity_charge or water_charge or security_deposit:
-            c.execute('''INSERT INTO room_configurations 
-                         (property_id, room_type, room_count, rent, electricity_charge, water_charge, security_deposit) 
-                         VALUES (?, ?, ?, ?, ?, ?, ?)''',
-                            (property_id, room_type, room_count or 0, rent or 0, electricity_charge or 0, water_charge or 0, security_deposit or 0))
+                c.execute('''INSERT INTO room_configurations 
+                            (property_id, room_type, room_count, rent, electricity_charge, water_charge, security_deposit) 
+                            VALUES (?, ?, ?, ?, ?, ?, ?)''',
+                                (property_id, room_type, room_count or 0, rent or 0, electricity_charge or 0, water_charge or 0, security_deposit or 0))
 
 
         # Save custom room configurations
@@ -598,21 +598,21 @@ def add_tenant():
             c.execute('BEGIN TRANSACTION')
             
             # Insert tenant
-        c.execute('''INSERT INTO tenants 
-                            (name, property_id, room_id, phone_number, email, move_in_date, move_out_date, police_verification) 
-                            VALUES (?, ?, ?, ?, ?, ?, ?, ?)''',
-                        (tenant_name, property_id, room_id, phone_number, email, move_in_date, move_out_date, drive_file_data))
-        
+            c.execute('''INSERT INTO tenants 
+                        (name, property_id, room_id, phone_number, email, move_in_date, move_out_date, police_verification) 
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)''',
+                    (tenant_name, property_id, room_id, phone_number, email, move_in_date, move_out_date, drive_file_data))
+            
             # Mark room as unavailable
             c.execute('UPDATE rooms SET is_available = FALSE WHERE id = ?', (room_id,))
-        
+            
             c.execute('COMMIT')
             # flash('Tenant added successfully!', 'success')
         except Exception as e:
             c.execute('ROLLBACK')
             flash(f'Error adding tenant: {str(e)}', 'danger')
         finally:
-        conn.close()
+            conn.close()
         
         return redirect(url_for('list_tenants'))
 
@@ -900,14 +900,14 @@ def edit_property(property_id):
 
             if existing_config_id:
                 # Update existing configuration
-            c.execute('''UPDATE room_configurations 
-                        SET room_count = ?, rent = ?, electricity_charge = ?, 
-                            water_charge = ?, security_deposit = ?
-                                WHERE id = ?''',
-                             (room_count or 0, rent or 0, electricity_charge or 0, water_charge or 0,
-                              security_deposit or 0, existing_config_id[0]))
+                c.execute('''UPDATE room_configurations 
+                            SET room_count = ?, rent = ?, electricity_charge = ?, 
+                                water_charge = ?, security_deposit = ?
+                            WHERE id = ?''',
+                         (room_count or 0, rent or 0, electricity_charge or 0, water_charge or 0,
+                          security_deposit or 0, existing_config_id[0]))
             else:
-                 # Insert as a new configuration if it doesn't exist (shouldn't happen with current template logic but as a safeguard)
+                # Insert as a new configuration if it doesn't exist
                 if room_count or rent or electricity_charge or water_charge or security_deposit:
                     c.execute('''INSERT INTO room_configurations
                                 (property_id, room_type, room_count, rent, electricity_charge, water_charge, security_deposit)
