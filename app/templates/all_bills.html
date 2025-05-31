@@ -174,7 +174,6 @@
                   <th>Due Date</th>
                   <th>Total Pending</th>
                   <th>Paid Amount</th>
-                  <th>Actions</th>
                 </tr>
               </thead>
               <tbody>
@@ -396,8 +395,6 @@
                       <th>Total Amount</th>
                       <th>Paid Amount</th>
                       <th>Pending Amount</th>
-                      <th>Due Date</th>
-                      <th>Actions</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -558,31 +555,7 @@
                 <td>₹${tenant.total_amount.toFixed(2)}</td>
                 <td class="text-success">₹${tenant.paid_amount.toFixed(2)}</td>
                 <td class="text-danger">₹${tenant.pending_amount.toFixed(2)}</td>
-                <td>${tenant.due_date}</td>
-                <td>
-                  <div class="dropdown">
-                    <button class="btn btn-sm btn-outline-secondary dropdown-toggle" type="button" data-bs-toggle="dropdown">
-                      Actions
-                    </button>
-                    <ul class="dropdown-menu">
-                      <li>
-                        <a class="dropdown-item" href="#" onclick="addPayment('${tenant.tenant_id}')">
-                          <i class="bi bi-plus-circle me-2"></i>Add Payment
-                        </a>
-                      </li>
-                      <li>
-                        <a class="dropdown-item" href="/bill-payments/${tenant.tenant_id}">
-                          <i class="bi bi-clock-history me-2"></i>View History
-                        </a>
-                      </li>
-                      <li>
-                        <a class="dropdown-item" href="#" onclick="sendReminder('${tenant.tenant_id}')">
-                          <i class="bi bi-bell me-2"></i>Send Reminder
-                        </a>
-                      </li>
-                    </ul>
-                  </div>
-                </td>
+                
               `;
             });
           })
