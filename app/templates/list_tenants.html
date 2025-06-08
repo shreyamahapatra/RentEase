@@ -108,7 +108,9 @@
                     <th>Room</th>
                     <th>Move In Date</th>
                     <th>Move Out Date</th>
+                    {% if status_filter == 'all' %}
                     <th>Status</th>
+                    {% endif %}
                     <th>Actions</th>
                   </tr>
                 </thead>
@@ -120,6 +122,7 @@
                     <td>{{ tenant.room_number }}</td>
                     <td>{{ tenant.move_in_date }}</td>
                     <td>{{ tenant.move_out_date or 'Active' }}</td>
+                    {% if status_filter == 'all' %}
                     <td>
                       {% if not tenant.move_out_date %}
                         <span class="badge bg-success">Active</span>
@@ -127,7 +130,11 @@
                         <span class="badge bg-secondary">Past Tenant</span>
                       {% endif %}
                     </td>
+                    {% endif %}
                     <td>
+                      <button type="button" class="btn btn-sm btn-info me-2" data-bs-toggle="modal" data-bs-target="#detailsModal{{ tenant.id }}" data-tooltip-title="View Details">
+                        <i class="bi bi-info-circle"></i>
+                      </button>
                       <a href="{{ url_for('edit_tenant', tenant_id=tenant.id) }}" class="btn btn-sm btn-primary me-2" data-bs-toggle="tooltip" data-bs-placement="top" title="Edit Tenant">
                         <i class="bi bi-pencil-square"></i>
                       </a>
@@ -141,6 +148,65 @@
                       </button>
                     </td>
                   </tr>
+
+                  <!-- Details Modal -->
+                  <div class="modal fade" id="detailsModal{{ tenant.id }}" tabindex="-1" aria-labelledby="detailsModalLabel{{ tenant.id }}" aria-hidden="true">
+                    <div class="modal-dialog modal-dialog-centered">
+                      <div class="modal-content">
+                        <div class="modal-header bg-light">
+                          <h5 class="modal-title" id="detailsModalLabel{{ tenant.id }}">
+                            <i class="bi bi-person-circle me-2"></i>Tenant Details
+                          </h5>
+                          <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                        </div>
+                        <div class="modal-body">
+                          <div class="mb-4">
+                            <h6 class="text-primary mb-3">
+                              <i class="bi bi-telephone me-2"></i>Contact Information
+                            </h6>
+                            <div class="ps-4">
+                              <p class="mb-2"><strong>Phone:</strong> {{ tenant.phone_number }}</p>
+                              <p class="mb-0"><strong>Email:</strong> {{ tenant.email or 'Not provided' }}</p>
+                            </div>
+                          </div>
+                          <div class="mb-4">
+                            <h6 class="text-primary mb-3">
+                              <i class="bi bi-calendar-event me-2"></i>Dates
+                            </h6>
+                            <div class="ps-4">
+                              <p class="mb-2"><strong>Move In:</strong> {{ tenant.move_in_date }}</p>
+                              <p class="mb-0"><strong>Move Out:</strong> {{ tenant.move_out_date or 'Active' }}</p>
+                            </div>
+                          </div>
+                          <div class="mb-4">
+                            <h6 class="text-primary mb-3">
+                              <i class="bi bi-currency-rupee me-2"></i>Charges
+                            </h6>
+                            <div class="ps-4">
+                              <p class="mb-2"><strong>Rent:</strong> ₹{{ tenant.rent }}</p>
+                              <p class="mb-2"><strong>Electricity Charge:</strong> ₹{{ tenant.electricity_charge }}</p>
+                              <p class="mb-0"><strong>Water Charge:</strong> ₹{{ tenant.water_charge }}</p>
+                            </div>
+                          </div>
+                          {% if tenant.police_verification %}
+                          <div class="mb-4">
+                            <h6 class="text-primary mb-3">
+                              <i class="bi bi-file-earmark-text me-2"></i>Police Verification
+                            </h6>
+                            <div class="ps-4">
+                              <a href="{{ tenant.police_verification }}" target="_blank" class="btn btn-outline-primary">
+                                <i class="bi bi-file-earmark-text me-1"></i>View Document
+                              </a>
+                            </div>
+                          </div>
+                          {% endif %}
+                        </div>
+                        <div class="modal-footer bg-light">
+                          <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
 
                   <!-- Move Out Modal -->
                   <div class="modal fade" id="moveOutModal{{ tenant.id }}" tabindex="-1" aria-labelledby="moveOutModalLabel{{ tenant.id }}" aria-hidden="true">

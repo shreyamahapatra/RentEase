@@ -278,7 +278,16 @@ def index():
                             AND strftime('%Y-%m', er.reading_date) = strftime('%Y-%m', 'now', 'localtime')
                             ORDER BY er.reading_date DESC LIMIT 1
                         ), rc.electricity_charge) 
-                        + rc.water_charge) as expected
+                        + rc.water_charge
+                    ) 
+                    + COALESCE((
+                        SELECT SUM(bp.pending_amount)
+                        FROM bill_payments bp
+                        JOIN tenants t2 ON bp.tenant_id = t2.id
+                        WHERE t2.property_id = t.property_id
+                        AND t2.move_out_date IS NULL
+                        AND strftime('%Y-%m', bp.payment_date) = strftime('%Y-%m', 'now', '-1 month', 'localtime')
+                    ), 0) as expected
                 FROM tenants t
                 JOIN rooms r ON t.room_id = r.id
                 JOIN properties p ON r.property_id = p.id
@@ -681,8 +690,8 @@ def list_tenants():
         flash('Please login to access this page', 'warning')
         return redirect(url_for('login'))
     
-    # Get filter parameter
-    status_filter = request.args.get('status', 'all')  # 'all', 'active', or 'past'
+    # Get filter parameter with 'active' as default
+    status_filter = request.args.get('status', 'active')  # Changed default from 'all' to 'active'
     
     conn = get_db()
     c = conn.cursor()
@@ -720,7 +729,7 @@ def list_tenants():
     elif status_filter == 'past':
         query += ' AND t.move_out_date IS NOT NULL'
     
-    query += ' ORDER BY t.move_in_date DESC'
+    query += ' ORDER BY CAST(r.room_number AS INTEGER)'
     
     # Get all tenants with their property and room information
     tenants = c.execute(query, (session['user_id'],)).fetchall()
@@ -1406,6 +1415,13 @@ def view_rooms(property_id):
         ORDER BY r.room_number
     ''', (property_id,)).fetchall()
     
+    # Get room configurations for the property
+    room_configs = c.execute('''
+        SELECT * FROM room_configurations 
+        WHERE property_id = ?
+        ORDER BY room_type
+    ''', (property_id,)).fetchall()
+    
     # Format rooms data
     formatted_rooms = []
     for room in rooms:
@@ -1427,7 +1443,7 @@ def view_rooms(property_id):
         formatted_rooms.append(formatted_room)
     
     conn.close()
-    return render_template('view_rooms.html', property=property_data, rooms=formatted_rooms)
+    return render_template('view_rooms.html', property=property_data, rooms=formatted_rooms, room_configs=room_configs)
 
 @app.route('/delete-room/<int:room_id>', methods=['POST'])
 def delete_room(room_id):
@@ -1564,6 +1580,7 @@ def monthly_bills(year, month):
     
     # Get month name
     month_name = datetime(year, month, 1).strftime('%B %Y')
+    month_date = f"{year}-{month:02d}"
     
     # Get all tenants with their bills for the specified month
     conn = get_db()
@@ -1617,7 +1634,9 @@ def monthly_bills(year, month):
         LEFT JOIN latest_payments lp ON t.id = lp.tenant_id AND lp.rn = 1
         WHERE p.user_id = ?
         AND strftime('%Y-%m', t.move_in_date) <= ?
-    ''', (str(year), f"{month:02d}", str(year), f"{month:02d}", session['user_id'], f"{year}-{month}"))
+        AND (t.move_out_date IS NULL OR strftime('%Y-%m', t.move_out_date) > ?)
+        ORDER BY CAST(r.room_number AS INTEGER)
+    ''', (str(year), f"{month:02d}", str(year), f"{month:02d}", str(year), f"{month:02d}", str(year), f"{month:02d}", session['user_id'], month_date, month_date))
     
     tenants = cursor.fetchall()
     
@@ -1681,7 +1700,7 @@ def all_bills():
             t.name as tenant_name,
             r.room_number,
             rc.rent as rent_amount,
-               COALESCE(SUM(CASE 
+            COALESCE(SUM(CASE 
                 WHEN bp.payment_mode != 'penalty' 
                 AND strftime('%Y-%m', bp.payment_date) = strftime('%Y-%m', 'now', 'localtime')
                     THEN bp.amount 
@@ -1758,9 +1777,8 @@ def all_bills():
         JOIN rooms r ON t.room_id = r.id
         JOIN properties p ON r.property_id = p.id
         JOIN room_configurations rc ON r.room_config_id = rc.id
-        LEFT JOIN bill_payments bp ON t.id = bp.tenant_id 
-            AND strftime('%Y-%m', bp.payment_date) = strftime('%Y-%m', 'now', 'localtime')
-        WHERE p.user_id = ?
+        LEFT JOIN bill_payments bp ON t.id = bp.tenant_id
+        WHERE p.user_id = ? AND t.move_out_date IS NULL
         GROUP BY t.id
         ORDER BY r.room_number
     ''', (session['user_id'],))
@@ -1800,10 +1818,10 @@ def all_bills():
             JOIN rooms r ON t.room_id = r.id
             JOIN properties p ON r.property_id = p.id
             JOIN room_configurations rc ON r.room_config_id = rc.id
-            LEFT JOIN bill_payments bp ON t.id = bp.tenant_id 
+            LEFT JOIN bill_payments bp ON t.id = bp.tenant_id
                 AND strftime('%Y', bp.payment_date) = ? 
                 AND strftime('%m', bp.payment_date) = ?
-            WHERE p.user_id = ?
+            WHERE p.user_id = ? 
         ''', (str(year), f"{month:02d}", str(year), f"{month:02d}", session['user_id']))
         
         result = cursor.fetchone()
