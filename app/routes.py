@@ -290,14 +290,21 @@ def index():
 
             # Calculate pending using current month's data
             c.execute('''
-                SELECT 
-                    SUM(CASE 
+                SELECT SUM(
+                    CASE 
                         WHEN EXISTS (
-                            SELECT 1 
+                            SELECT 1 FROM bill_payments 
+                            WHERE tenant_id = t.id 
+                            AND strftime('%Y-%m', payment_date) = strftime('%Y-%m', 'now', 'localtime')
+                        ) THEN (
+                            SELECT pending_amount 
                             FROM bill_payments 
                             WHERE tenant_id = t.id 
                             AND strftime('%Y-%m', payment_date) = strftime('%Y-%m', 'now', 'localtime')
-                        ) THEN ((rc.rent + 
+                            ORDER BY payment_date DESC LIMIT 1
+                        )
+                        ELSE (
+                            (rc.rent + 
                             COALESCE((
                                 SELECT er.total_cost FROM electricity_readings er
                                 WHERE er.property_id = t.property_id
@@ -305,14 +312,17 @@ def index():
                                 AND strftime('%Y-%m', er.reading_date) = strftime('%Y-%m', 'now', 'localtime')
                                 ORDER BY er.reading_date DESC LIMIT 1
                             ), rc.electricity_charge)
-                            + rc.water_charge) - COALESCE((
-                                SELECT SUM(amount) 
+                            + rc.water_charge) + 
+                            COALESCE((
+                                SELECT pending_amount 
                                 FROM bill_payments 
                                 WHERE tenant_id = t.id 
-                                AND strftime('%Y-%m', payment_date) = strftime('%Y-%m', 'now', 'localtime')
-                            ), 0))
-                        ELSE 0 
-                    END) as pending
+                                AND strftime('%Y-%m', payment_date) = strftime('%Y-%m', date('now', 'localtime', '-1 month'))
+                                ORDER BY payment_date DESC LIMIT 1
+                            ), 0)
+                        )
+                    END
+                ) as pending
                 FROM tenants t
                 JOIN rooms r ON t.room_id = r.id
                 JOIN properties p ON r.property_id = p.id
