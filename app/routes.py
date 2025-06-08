@@ -2778,7 +2778,7 @@ def electricity_readings():
         JOIN properties p ON er.property_id = p.id
         JOIN rooms r ON er.room_id = r.id
         WHERE p.user_id = ?
-        ORDER BY er.reading_date DESC
+        ORDER BY r.room_number ASC, er.reading_date DESC
     ''', (session['user_id'],)).fetchall()
 
     # Get unique months from readings
@@ -2786,7 +2786,7 @@ def electricity_readings():
 
     # Get all properties for the user
     properties = c.execute('SELECT id, name FROM properties WHERE user_id = ?', (session['user_id'],)).fetchall()
-
+    
     conn.close()
     return render_template('electricity_readings.html', readings=readings, months=months, properties=properties)
 
