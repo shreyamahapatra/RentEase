@@ -131,6 +131,187 @@ def init_db():
     conn.commit()
     conn.close()
 
+def get_tenants_with_bills(user_id):
+    conn = get_db()
+    cursor = conn.cursor()
+    
+    cursor.execute('''
+        SELECT 
+            p.name as property_name,
+            t.name as tenant_name,
+            r.room_number,
+            rc.rent as rent_amount,
+            COALESCE(SUM(CASE 
+                WHEN bp.payment_mode != 'penalty' 
+                AND strftime('%Y-%m', bp.payment_date) = strftime('%Y-%m', 'now', 'localtime')
+                    THEN bp.amount 
+                    ELSE 0 
+            END), 0) as paid_amount,
+            COALESCE((
+                SELECT er.total_cost FROM electricity_readings er
+                WHERE er.property_id = t.property_id
+                    AND er.room_id = t.room_id
+                    AND strftime('%Y-%m', er.reading_date) = strftime('%Y-%m', 'now', 'localtime')
+                ORDER BY er.reading_date DESC LIMIT 1
+            ), rc.electricity_charge) as electricity_rate,
+            rc.water_charge as water_rate,
+            t.id as tenant_id,
+            t.move_in_date,
+            CASE 
+                WHEN t.move_in_date <= date('now', 'localtime') THEN date('now', 'localtime', 'start of month', '+4 days')
+                ELSE date(t.move_in_date, 'start of month', '+4 days')
+            END as due_date,
+            p.id as property_id,
+            (rc.rent + 
+                COALESCE((
+                    SELECT er.total_cost FROM electricity_readings er
+                    WHERE er.property_id = t.property_id
+                        AND er.room_id = t.room_id
+                        AND strftime('%Y-%m', er.reading_date) = strftime('%Y-%m', 'now', 'localtime')
+                    ORDER BY er.reading_date DESC LIMIT 1
+                ), rc.electricity_charge)
+                + rc.water_charge) as total_amount,
+            CASE 
+                WHEN EXISTS (
+                    SELECT 1 
+                    FROM bill_payments 
+                    WHERE tenant_id = t.id 
+                    AND strftime('%Y-%m', payment_date) = strftime('%Y-%m', date('now', 'localtime', 'start of month', '-1 month'))
+                ) THEN COALESCE((
+                    SELECT pending_amount 
+                    FROM bill_payments 
+                    WHERE tenant_id = t.id 
+                    AND strftime('%Y-%m', payment_date) = strftime('%Y-%m', date('now', 'localtime', 'start of month', '-1 month'))
+                    ORDER BY id DESC LIMIT 1
+                ), 0)
+                ELSE 0 
+            END as prev_month_pending,
+            ((rc.rent + 
+                COALESCE((
+                    SELECT er.total_cost FROM electricity_readings er
+                    WHERE er.property_id = t.property_id
+                        AND er.room_id = t.room_id
+                        AND strftime('%Y-%m', er.reading_date) = strftime('%Y-%m', 'now', 'localtime')
+                    ORDER BY er.reading_date DESC LIMIT 1
+                ), rc.electricity_charge)
+                + rc.water_charge) + 
+            CASE 
+                WHEN EXISTS (
+                    SELECT 1 
+                    FROM bill_payments 
+                    WHERE tenant_id = t.id 
+                    AND strftime('%Y-%m', payment_date) = strftime('%Y-%m', date('now', 'localtime', 'start of month', '-1 month'))
+                ) THEN COALESCE((
+                    SELECT pending_amount 
+                    FROM bill_payments 
+                    WHERE tenant_id = t.id 
+                    AND strftime('%Y-%m', payment_date) = strftime('%Y-%m', date('now', 'localtime', 'start of month', '-1 month'))
+                    ORDER BY payment_date DESC, id DESC LIMIT 1
+                ), 0)
+                ELSE 0 
+            END - COALESCE(SUM(CASE 
+                WHEN strftime('%Y-%m', bp.payment_date) = strftime('%Y-%m', 'now', 'localtime')
+                    THEN bp.amount 
+                    ELSE 0 
+            END), 0)) as total_pending
+        FROM tenants t
+        JOIN rooms r ON t.room_id = r.id
+        JOIN properties p ON r.property_id = p.id
+        JOIN room_configurations rc ON r.room_config_id = rc.id
+        LEFT JOIN bill_payments bp ON t.id = bp.tenant_id
+        WHERE p.user_id = ? AND t.move_out_date IS NULL
+        GROUP BY t.id
+        ORDER BY r.room_number
+    ''', (user_id,))
+    
+    tenants = cursor.fetchall()
+    conn.close()
+    
+    # Calculate total statistics
+    total_stats = {
+        'total': sum(tenant['total_amount'] + tenant['prev_month_pending'] for tenant in tenants),
+        'paid': sum(tenant['paid_amount'] for tenant in tenants),
+        'pending': sum(tenant['total_pending'] for tenant in tenants)
+    }
+    
+    # Calculate building-wise statistics
+    building_stats = {}
+    for tenant in tenants:
+        property_name = tenant['property_name']
+        if property_name not in building_stats:
+            building_stats[property_name] = {
+                'total': 0,
+                'paid': 0,
+                'pending': 0,
+                'tenant_count': 0
+            }
+        
+        building_stats[property_name]['total'] += tenant['total_amount'] + tenant['prev_month_pending']
+        building_stats[property_name]['paid'] += tenant['paid_amount']
+        building_stats[property_name]['pending'] += tenant['total_pending']
+        building_stats[property_name]['tenant_count'] += 1
+    
+    return tenants, total_stats, building_stats
+
+
+def get_monthly_collection_data(user_id):
+    conn = get_db()
+    c = conn.cursor()
+    # Get current month and year
+    current_date = datetime.now()
+    monthly_labels = []
+    monthly_collections = []
+    monthly_expected = []
+    
+    
+    for i in range(6):
+        month_date = current_date - timedelta(days=30*i)
+        year = month_date.year
+        month = month_date.month
+        month_name = month_date.strftime('%b %Y')
+        monthly_labels.insert(0, month_name)
+        
+        # Get collection data for this month
+        collection_data = c.execute('''
+            SELECT COALESCE(SUM(bp.amount), 0) as collection
+            FROM bill_payments bp
+            JOIN tenants t ON bp.tenant_id = t.id
+            JOIN rooms r ON t.room_id = r.id
+            JOIN properties p ON r.property_id = p.id
+            WHERE p.user_id = ?
+            AND strftime('%m', bp.payment_date) = ? 
+            AND strftime('%Y', bp.payment_date) = ?
+            AND bp.payment_mode != 'penalty'
+        ''', (user_id, str(month).zfill(2), str(year))).fetchone()
+        
+        monthly_collections.insert(0, collection_data['collection'])
+        
+        # Get expected amount for this month
+        expected_data = c.execute('''
+            SELECT COALESCE(SUM(
+                rc.rent + 
+                COALESCE((
+                    SELECT er.total_cost 
+                    FROM electricity_readings er
+                    WHERE er.property_id = t.property_id
+                    AND er.room_id = t.room_id
+                    AND strftime('%Y-%m', er.reading_date) = ?
+                    ORDER BY er.reading_date DESC LIMIT 1
+                ), rc.electricity_charge) + 
+                rc.water_charge
+            ), 0) as expected
+            FROM tenants t
+            JOIN rooms r ON t.room_id = r.id
+            JOIN properties p ON r.property_id = p.id
+            JOIN room_configurations rc ON r.room_config_id = rc.id
+            WHERE p.user_id = ? 
+            AND t.move_out_date IS NULL
+            AND t.move_in_date <= date(?, 'start of month', '+1 month', '-1 day')
+        ''', (f"{year}-{str(month).zfill(2)}", user_id, f"{year}-{str(month).zfill(2)}-01")).fetchone()
+        
+        monthly_expected.insert(0, expected_data['expected'])
+    conn.close()
+    return monthly_labels, monthly_collections, monthly_expected
 # Initialize database when app starts
 init_db()
 
@@ -142,230 +323,29 @@ def index():
         c = conn.cursor()
         properties = c.execute('SELECT * FROM properties WHERE user_id = ?', (session['user_id'],)).fetchall()
         
-        # Get current month and year
-        current_date = datetime.now()
-        current_month = current_date.month
-        current_year = current_date.year
+        tenants, stats, building_stats = get_tenants_with_bills(session['user_id'])
+        monthly_labels, monthly_collections, monthly_expected = get_monthly_collection_data(session['user_id'])
         
-        # Calculate previous month and year
-        if current_month == 1:
-            prev_month = 12
-            prev_year = current_year - 1
-        else:
-            prev_month = current_month - 1
-            prev_year = current_year
-        
-        # Get tenants data with payment information - only active tenants
-        tenants = c.execute('''
-            SELECT t.id, t.name, t.property_id, t.room_id, t.phone_number, t.email, t.move_in_date, t.move_out_date, t.police_verification,
-                   p.name as property_name, r.room_number, rc.room_type, rc.rent, rc.electricity_charge, rc.water_charge, rc.security_deposit,
-                   COALESCE(SUM(CASE 
-                        WHEN strftime('%m', bp.payment_date) = ? AND strftime('%Y', bp.payment_date) = ? 
-                        THEN bp.amount 
-                        ELSE 0 
-                   END), 0) as current_month_paid,
-                   COALESCE(SUM(CASE 
-                        WHEN strftime('%m', bp.payment_date) = ? AND strftime('%Y', bp.payment_date) = ? 
-                        THEN bp.amount 
-                        ELSE 0 
-                   END), 0) as prev_month_paid
-            FROM tenants t
-            JOIN properties p ON t.property_id = p.id
-            JOIN rooms r ON t.room_id = r.id
-            JOIN room_configurations rc ON r.room_config_id = rc.id
-            LEFT JOIN bill_payments bp ON t.id = bp.tenant_id 
-                AND (strftime('%m', bp.payment_date) IN (?, ?) 
-                    AND strftime('%Y', bp.payment_date) IN (?, ?))
-            WHERE p.user_id = ? AND t.move_out_date IS NULL
-            GROUP BY t.id
-        ''', (str(current_month).zfill(2), str(current_year),
-              str(prev_month).zfill(2), str(prev_year),
-              str(current_month).zfill(2), str(prev_month).zfill(2),
-              str(current_year), str(prev_year),
-              session['user_id'])).fetchall()
-        
-        # Calculate total collection and pending amounts
-        total_collection = 0
-        total_pending = 0
-        total_expected = 0
-        
-        # Get monthly data for the last 6 months
-        monthly_labels = []
-        monthly_collections = []
-        monthly_expected = []
-        
-        for i in range(6):
-            month_date = current_date - timedelta(days=30*i)
-            year = month_date.year
-            month = month_date.month
-            month_str = month_date.strftime('%b %Y')
-            monthly_labels.insert(0, month_str)
-            
-            # Get monthly totals
-            c.execute('''
-                SELECT 
-                    COALESCE(SUM(CASE WHEN bp.payment_mode != 'penalty' THEN bp.amount ELSE 0 END), 0) as paid_amount,
-                    SUM(rc.rent + 
-                        COALESCE((
-                            SELECT er.total_cost 
-                            FROM electricity_readings er
-                            WHERE er.property_id = t.property_id
-                            AND er.room_id = t.room_id
-                            AND strftime('%Y', er.reading_date) = ? 
-                            AND strftime('%m', er.reading_date) = ?
-                            ORDER BY er.reading_date DESC LIMIT 1
-                        ), rc.electricity_charge) 
-                        + rc.water_charge) as expected_total
-                FROM tenants t
-                JOIN rooms r ON t.room_id = r.id
-                JOIN properties p ON r.property_id = p.id
-                JOIN room_configurations rc ON r.room_config_id = rc.id
-                LEFT JOIN bill_payments bp ON t.id = bp.tenant_id 
-                    AND strftime('%Y', bp.payment_date) = ? 
-                    AND strftime('%m', bp.payment_date) = ?
-                WHERE p.user_id = ? AND t.move_out_date IS NULL
-            ''', (str(year), f"{month:02d}", str(year), f"{month:02d}", session['user_id']))
-            result = c.fetchone()
-
-            c.execute('''
-                SELECT 
-                    SUM(rc.rent + 
-                        COALESCE((
-                            SELECT er.total_cost 
-                            FROM electricity_readings er
-                            WHERE er.property_id = t.property_id
-                            AND er.room_id = t.room_id
-                            AND strftime('%Y', er.reading_date) = ? 
-                            AND strftime('%m', er.reading_date) = ?
-                            ORDER BY er.reading_date DESC LIMIT 1
-                        ), rc.electricity_charge) 
-                        + rc.water_charge) as expected_total
-                FROM tenants t
-                JOIN rooms r ON t.room_id = r.id
-                JOIN properties p ON r.property_id = p.id
-                JOIN room_configurations rc ON r.room_config_id = rc.id
-                WHERE p.user_id = ? AND t.move_out_date IS NULL
-            ''', (str(year), f"{month:02d}", session['user_id']))
-            result2 = c.fetchone()
-            monthly_collections.insert(0, result['paid_amount'] if result else 0)
-            monthly_expected.insert(0, result2['expected_total'] if result2 else 0)
-        
-        # Calculate property-wise collections
+        # Convert building_stats to property_collections format
         property_collections = []
-        for property in properties:
-            c.execute('''
-                SELECT 
-                    COALESCE(SUM(CASE WHEN bp.payment_mode != 'penalty' THEN bp.amount ELSE 0 END), 0) as collected
-                FROM tenants t
-                JOIN rooms r ON t.room_id = r.id
-                JOIN properties p ON r.property_id = p.id
-                JOIN room_configurations rc ON r.room_config_id = rc.id
-                LEFT JOIN bill_payments bp ON t.id = bp.tenant_id 
-                    AND strftime('%Y-%m', bp.payment_date) = strftime('%Y-%m', 'now', 'localtime')
-                WHERE t.property_id = ? AND t.move_out_date IS NULL
-                GROUP BY t.property_id
-            ''', (property[0],))
-            result = c.fetchone()
-
-            c.execute('''
-                SELECT 
-                    SUM(rc.rent + 
-                        COALESCE((
-                            SELECT er.total_cost 
-                            FROM electricity_readings er
-                            WHERE er.property_id = t.property_id
-                            AND er.room_id = t.room_id
-                            AND strftime('%Y-%m', er.reading_date) = strftime('%Y-%m', 'now', 'localtime')
-                            ORDER BY er.reading_date DESC LIMIT 1
-                        ), rc.electricity_charge) 
-                        + rc.water_charge
-                    ) 
-                    + COALESCE((
-                        SELECT SUM(bp.pending_amount)
-                        FROM bill_payments bp
-                        JOIN tenants t2 ON bp.tenant_id = t2.id
-                        WHERE t2.property_id = t.property_id
-                        AND t2.move_out_date IS NULL
-                        AND strftime('%Y-%m', bp.payment_date) = strftime('%Y-%m', 'now', '-1 month', 'localtime')
-                    ), 0) as expected
-                FROM tenants t
-                JOIN rooms r ON t.room_id = r.id
-                JOIN properties p ON r.property_id = p.id
-                JOIN room_configurations rc ON r.room_config_id = rc.id
-                WHERE t.property_id = ? AND t.move_out_date IS NULL
-                GROUP BY t.property_id
-            ''', (property[0],))
-            result2 = c.fetchone()
-
-            # Calculate pending using current month's data
-            c.execute('''
-                SELECT SUM(
-                    CASE 
-                        WHEN EXISTS (
-                            SELECT 1 FROM bill_payments 
-                            WHERE tenant_id = t.id 
-                            AND strftime('%Y-%m', payment_date) = strftime('%Y-%m', 'now', 'localtime')
-                        ) THEN (
-                            SELECT pending_amount 
-                            FROM bill_payments 
-                            WHERE tenant_id = t.id 
-                            AND strftime('%Y-%m', payment_date) = strftime('%Y-%m', 'now', 'localtime')
-                            ORDER BY payment_date DESC LIMIT 1
-                        )
-                        ELSE (
-                            (rc.rent + 
-                            COALESCE((
-                                SELECT er.total_cost FROM electricity_readings er
-                                WHERE er.property_id = t.property_id
-                                AND er.room_id = t.room_id
-                                AND strftime('%Y-%m', er.reading_date) = strftime('%Y-%m', 'now', 'localtime')
-                                ORDER BY er.reading_date DESC LIMIT 1
-                            ), rc.electricity_charge)
-                            + rc.water_charge) + 
-                            COALESCE((
-                                SELECT pending_amount 
-                                FROM bill_payments 
-                                WHERE tenant_id = t.id 
-                                AND strftime('%Y-%m', payment_date) = strftime('%Y-%m', date('now', 'localtime', '-1 month'))
-                                ORDER BY payment_date DESC LIMIT 1
-                            ), 0)
-                        )
-                    END
-                ) as pending
-                FROM tenants t
-                JOIN rooms r ON t.room_id = r.id
-                JOIN properties p ON r.property_id = p.id
-                JOIN room_configurations rc ON r.room_config_id = rc.id
-                WHERE t.property_id = ? AND t.move_out_date IS NULL
-                GROUP BY t.property_id
-            ''', (property[0],))
-            result3 = c.fetchone()
-
-            if result is not None and result2 is not None and result3 is not None:
-                collected = result['collected']
-                expected = result2['expected']
-                pending = result3['pending']
-                collection_rate = (collected / expected * 100) if expected > 0 else 0
-                property_collections.append({
-                    'name': property[1],
-                    'expected': expected,
-                    'collected': collected,
-                    'pending': pending,
-                    'collection_rate': f'{collection_rate:.2f}'
-                })
-                total_collection += collected
-                total_pending += pending
-                total_expected += expected
+        for property_name, stats in building_stats.items():
+            collection_rate = (stats['paid'] / stats['total'] * 100) if stats['total'] > 0 else 0
+            property_collections.append({
+                'name': property_name,
+                'collected': stats['paid'],
+                'pending': stats['pending'],
+                'expected': stats['total'],
+                'collection_rate': f'{collection_rate:.2f}'
+            })
         
-        # Calculate overall collection rate
-        collection_rate = (total_collection / total_expected * 100) if total_expected > 0 else 0
+        # Calculate collection rate
+        collection_rate = (stats['paid'] / stats['total'] * 100) if stats['total'] > 0 else 0
         
-        conn.close()
         return render_template('index.html', 
                              properties=properties, 
                              tenants=tenants,
-                             total_pending=total_pending,
-                             total_collection=total_collection,
+                             total_pending=stats['pending'],
+                             total_collection=stats['paid'],
                              collection_rate=round(collection_rate, 1),
                              monthly_labels=monthly_labels,
                              monthly_collections=monthly_collections,
@@ -379,7 +359,7 @@ def index():
                          monthly_labels=[],
                          monthly_collections=[],
                          monthly_expected=[],
-                         property_collections=[])
+                         property_collections={})
 
 @app.route('/login', methods=['GET', 'POST'])
 def login():
@@ -1692,105 +1672,8 @@ def all_bills():
     
     conn = get_db()
     cursor = conn.cursor()
-    
-    # Get all tenants with their bills
-    cursor.execute('''
-        SELECT 
-            p.name as property_name,
-            t.name as tenant_name,
-            r.room_number,
-            rc.rent as rent_amount,
-            COALESCE(SUM(CASE 
-                WHEN bp.payment_mode != 'penalty' 
-                AND strftime('%Y-%m', bp.payment_date) = strftime('%Y-%m', 'now', 'localtime')
-                    THEN bp.amount 
-                    ELSE 0 
-            END), 0) as paid_amount,
-            COALESCE((
-                SELECT er.total_cost FROM electricity_readings er
-                WHERE er.property_id = t.property_id
-                  AND er.room_id = t.room_id
-                  AND strftime('%Y-%m', er.reading_date) = strftime('%Y-%m', 'now', 'localtime')
-                ORDER BY er.reading_date DESC LIMIT 1
-            ), rc.electricity_charge) as electricity_rate,
-            rc.water_charge as water_rate,
-            t.id as tenant_id,
-            t.move_in_date,
-            CASE 
-                WHEN t.move_in_date <= date('now', 'localtime') THEN date('now', 'localtime', 'start of month', '+4 days')
-                ELSE date(t.move_in_date, 'start of month', '+4 days')
-            END as due_date,
-            p.id as property_id,
-            (rc.rent + 
-                COALESCE((
-                    SELECT er.total_cost FROM electricity_readings er
-                    WHERE er.property_id = t.property_id
-                      AND er.room_id = t.room_id
-                      AND strftime('%Y-%m', er.reading_date) = strftime('%Y-%m', 'now', 'localtime')
-                    ORDER BY er.reading_date DESC LIMIT 1
-                ), rc.electricity_charge)
-                + rc.water_charge) as total_amount,
-            CASE 
-                WHEN EXISTS (
-                    SELECT 1 
-                    FROM bill_payments 
-                    WHERE tenant_id = t.id 
-                    AND strftime('%Y-%m', payment_date) = strftime('%Y-%m', date('now', 'localtime', 'start of month', '-1 month'))
-                ) THEN COALESCE((
-                    SELECT pending_amount 
-                    FROM bill_payments 
-                    WHERE tenant_id = t.id 
-                    AND strftime('%Y-%m', payment_date) = strftime('%Y-%m', date('now', 'localtime', 'start of month', '-1 month'))
-                    ORDER BY id DESC LIMIT 1
-                ), 0)
-                ELSE 0 
-            END as prev_month_pending,
-            ((rc.rent + 
-                COALESCE((
-                    SELECT er.total_cost FROM electricity_readings er
-                    WHERE er.property_id = t.property_id
-                      AND er.room_id = t.room_id
-                      AND strftime('%Y-%m', er.reading_date) = strftime('%Y-%m', 'now', 'localtime')
-                    ORDER BY er.reading_date DESC LIMIT 1
-                ), rc.electricity_charge)
-                + rc.water_charge) + 
-            CASE 
-                WHEN EXISTS (
-                    SELECT 1 
-                    FROM bill_payments 
-                    WHERE tenant_id = t.id 
-                    AND strftime('%Y-%m', payment_date) = strftime('%Y-%m', date('now', 'localtime', 'start of month', '-1 month'))
-                ) THEN COALESCE((
-                    SELECT pending_amount 
-                    FROM bill_payments 
-                    WHERE tenant_id = t.id 
-                    AND strftime('%Y-%m', payment_date) = strftime('%Y-%m', date('now', 'localtime', 'start of month', '-1 month'))
-                    ORDER BY payment_date DESC, id DESC LIMIT 1
-                ), 0)
-                ELSE 0 
-            END - COALESCE(SUM(CASE 
-                WHEN strftime('%Y-%m', bp.payment_date) = strftime('%Y-%m', 'now', 'localtime')
-                    THEN bp.amount 
-                    ELSE 0 
-            END), 0)) as total_pending
-        FROM tenants t
-        JOIN rooms r ON t.room_id = r.id
-        JOIN properties p ON r.property_id = p.id
-        JOIN room_configurations rc ON r.room_config_id = rc.id
-        LEFT JOIN bill_payments bp ON t.id = bp.tenant_id
-        WHERE p.user_id = ? AND t.move_out_date IS NULL
-        GROUP BY t.id
-        ORDER BY r.room_number
-    ''', (session['user_id'],))
-    
-    tenants = cursor.fetchall()
-    
-    # Calculate total statistics
-    total_stats = {
-        'total': sum(tenant['total_amount'] for tenant in tenants),
-        'paid': sum(tenant['paid_amount'] for tenant in tenants),
-        'pending': sum(tenant['total_pending'] for tenant in tenants)
-    }
+
+    tenants, total_stats, building_stats = get_tenants_with_bills(session['user_id'])
     
     # Get last 6 months for the monthly overview
     today = datetime.now()
@@ -1822,6 +1705,7 @@ def all_bills():
                 AND strftime('%Y', bp.payment_date) = ? 
                 AND strftime('%m', bp.payment_date) = ?
             WHERE p.user_id = ? 
+            ORDER BY r.id
         ''', (str(year), f"{month:02d}", str(year), f"{month:02d}", session['user_id']))
         
         result = cursor.fetchone()
@@ -2219,7 +2103,7 @@ def api_monthly_bills(month):
                 WHERE tenant_id = t.id 
                 AND strftime('%Y', payment_date) = ? 
                 AND strftime('%m', payment_date) = ?
-                ORDER BY payment_date DESC LIMIT 1
+                ORDER BY id DESC LIMIT 1
             ), 0) as pending_amount,
             lp.payment_id as latest_payment_id
         FROM tenants t
