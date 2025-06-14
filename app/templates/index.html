@@ -460,7 +460,6 @@
                       <th>Expected</th>
                       <th>Collected</th>
                       <th>Pending</th>
-              
                       <th>Collection Rate</th>
                     </tr>
                   </thead>
@@ -483,6 +482,22 @@
                       </td>
                     </tr>
                     {% endfor %}
+                    <tr class="table-secondary fw-bold">
+                      <td>Total</td>
+                      <td>₹{{ "%.2f"|format(total_expected) }}</td>
+                      <td class="text-success">₹{{ "%.2f"|format(total_collection) }}</td>
+                      <td class="text-danger">₹{{ "%.2f"|format(total_pending) }}</td>
+                      <td>
+                        <div class="progress" style="height: 6px;">
+                          <div class="progress-bar bg-success" role="progressbar" 
+                               style="width: {{ collection_rate }}%" 
+                               aria-valuenow="{{ collection_rate }}" 
+                               aria-valuemin="0" 
+                               aria-valuemax="100"></div>
+                        </div>
+                        <small class="text-muted">{{ collection_rate }}%</small>
+                      </td>
+                    </tr>
                   </tbody>
                 </table>
               </div>
@@ -495,7 +510,7 @@
               <div class="card border-0 shadow-sm">
                 <div class="card-body p-4">
                   <h5 class="card-title mb-4">Monthly Collection Trends</h5>
-                  <canvas id="monthlyTrendsChart" height="200"></canvas>
+                  <canvas id="monthlyCollectionChart"></canvas>
                 </div>
               </div>
             </div>
@@ -618,33 +633,26 @@
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <script>
     document.addEventListener('DOMContentLoaded', function() {
-      // Monthly Trends Chart
-      const monthlyTrendsCtx = document.getElementById('monthlyTrendsChart').getContext('2d');
-      new Chart(monthlyTrendsCtx, {
+      // Monthly Collection Chart
+      const monthlyCtx = document.getElementById('monthlyCollectionChart').getContext('2d');
+      new Chart(monthlyCtx, {
         type: 'line',
         data: {
-          labels: {{ monthly_labels|tojson | safe }},
+          labels: {{ monthly_labels|tojson }},
           datasets: [{
-            label: 'Collection',
-            data: {{ monthly_collections|tojson | safe }},
-            borderColor: '#4CAF50',
-            backgroundColor: 'rgba(76, 175, 80, 0.1)',
-            tension: 0.4,
-            fill: true
-          }, {
-            label: 'Expected',
-            data: {{ monthly_expected|tojson | safe }},
-            borderColor: '#2196F3',
-            backgroundColor: 'rgba(33, 150, 243, 0.1)',
-            tension: 0.4,
-            fill: true
+            label: 'Collections',
+            data: {{ monthly_collections|tojson }},
+            borderColor: 'rgb(75, 192, 192)',
+            tension: 0.1,
+            fill: false
           }]
         },
         options: {
           responsive: true,
           plugins: {
-            legend: {
-              position: 'top',
+            title: {
+              display: true,
+              text: 'Monthly Collection Trends'
             }
           },
           scales: {
@@ -652,7 +660,7 @@
               beginAtZero: true,
               ticks: {
                 callback: function(value) {
-                  return '₹' + value;
+                  return '₹' + value.toLocaleString();
                 }
               }
             }

@@ -328,6 +328,10 @@ def index():
         
         # Convert building_stats to property_collections format
         property_collections = []
+        total_expected = 0
+        total_collected = 0
+        total_pending = 0
+        
         for property_name, stats in building_stats.items():
             collection_rate = (stats['paid'] / stats['total'] * 100) if stats['total'] > 0 else 0
             property_collections.append({
@@ -337,20 +341,24 @@ def index():
                 'expected': stats['total'],
                 'collection_rate': f'{collection_rate:.2f}'
             })
+            total_expected += stats['total']
+            total_collected += stats['paid']
+            total_pending += stats['pending']
         
-        # Calculate collection rate
-        collection_rate = (stats['paid'] / stats['total'] * 100) if stats['total'] > 0 else 0
+        # Calculate overall collection rate
+        overall_collection_rate = (total_collected / total_expected * 100) if total_expected > 0 else 0
         
         return render_template('index.html', 
-                             properties=properties, 
-                             tenants=tenants,
-                             total_pending=stats['pending'],
-                             total_collection=stats['paid'],
-                             collection_rate=round(collection_rate, 1),
-                             monthly_labels=monthly_labels,
-                             monthly_collections=monthly_collections,
-                             monthly_expected=monthly_expected,
-                             property_collections=property_collections)
+                          properties=properties, 
+                          tenants=tenants,
+                          total_pending=total_pending,
+                          total_collection=total_collected,
+                          total_expected=total_expected,
+                          collection_rate=round(overall_collection_rate, 1),
+                          monthly_labels=monthly_labels,
+                          monthly_collections=monthly_collections,
+                          monthly_expected=monthly_expected,
+                          property_collections=property_collections)
     return render_template('index.html', 
                          tenants=[], 
                          total_pending=0,
