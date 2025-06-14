@@ -3078,7 +3078,7 @@ def send_collection_report():
     
     try:
         msg = Message(
-            f'Property-wise Collection Report - {datetime.now().strftime("%Y-%m-%d")}',
+            f'Your Property-wise Collection Report - {datetime.now().strftime("%Y-%m-%d")}',
             recipients=recipients
         )
         msg.html = html_content

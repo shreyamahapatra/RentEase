@@ -43,6 +43,48 @@
         text-decoration: none;
         font-size: 1.2rem;
     }
+    .saved-emails-section {
+      background: #f7f7fa;
+      border-radius: 12px;
+      padding: 1rem;
+      margin-bottom: 1rem;
+      box-shadow: 0 1px 4px rgba(0,0,0,0.03);
+    }
+    .saved-email-pill {
+      display: inline-flex;
+      align-items: center;
+      background: #fff;
+      border-radius: 999px;
+      box-shadow: 0 1px 2px rgba(0,0,0,0.06);
+      padding: 0.35em 1em 0.35em 0.9em;
+      margin: 0.25em 0.5em 0.25em 0;
+      font-size: 1rem;
+      color: #666;
+      transition: box-shadow 0.2s;
+    }
+    .saved-email-pill:hover {
+      box-shadow: 0 2px 8px rgba(0,0,0,0.10);
+    }
+    .saved-email-btn {
+      background: none;
+      border: none;
+      font-size: 1.3rem;
+      margin-left: 0.5em;
+      color: #888;
+      cursor: pointer;
+      outline: none;
+      transition: color 0.2s;
+    }
+    .saved-email-btn.add:hover {
+      color: #007bff;
+    }
+    .saved-email-btn.remove {
+      color: #dc3545;
+      font-weight: bold;
+    }
+    .saved-email-btn.remove:hover {
+      color: #a71d2a;
+    }
   </style>
 </head>
 
@@ -254,8 +296,8 @@
                         <div class="card border-0 bg-light h-100 position-relative">
                           <div class="card-body">
                             <div class="d-flex align-items-center">
-                              <div class="icon-circle me-3 bg-success bg-opacity-10">
-                                <i class="bi bi-file-earmark-text text-success"></i>
+                              <div class="icon-circle me-3 bg-primary bg-opacity-10">
+                                <i class="bi bi-file-earmark-text text-primary"></i>
                               </div>
                               <div>
                                 <h5 class="mb-1">Generate Reports</h5>
@@ -548,23 +590,15 @@
                     </div>
                     
                     {% if saved_emails %}
-                    <div class="mb-3">
-                      <label class="form-label">Saved Email Addresses</label>
-                      <div class="list-group">
+                    <div class="mb-3 saved-emails-section">
+                        <label class="form-label mb-2">Saved Email Addresses</label><br>
                         {% for email in saved_emails %}
-                        <div class="list-group-item d-flex justify-content-between align-items-center py-2">
-                          <span>{{ email }}</span>
-                          <div>
-                            <button type="button" class="btn btn-sm btn-link me-1" onclick="addSavedEmail('{{ email }}')">
-                              +
-                            </button>
-                            <button type="button" class="btn btn-sm btn-link text-danger" onclick="deleteSavedEmail('{{ email }}')">
-                              X
-                            </button>
-                          </div>
-                        </div>
+                        <span class="saved-email-pill">
+                            {{ email }}
+                            <button type="button" class="saved-email-btn add" title="Add to list" onclick="addSavedEmail('{{ email }}')">+</button>
+                            <button type="button" class="saved-email-btn remove" title="Remove" onclick="deleteSavedEmail('{{ email }}')">×</button>
+                        </span>
                         {% endfor %}
-                      </div>
                     </div>
                     {% endif %}
                     
@@ -842,33 +876,27 @@
     }
 
     function addEmailToSavedList(email) {
-      let listGroup = document.querySelector('.list-group');
-      if (!listGroup) {
-        // If the list doesn't exist, create it
+      let container = document.querySelector('.saved-emails-section');
+      if (!container) {
+        // If the section doesn't exist, create it
         const mb3 = document.createElement('div');
-        mb3.className = 'mb-3';
-        mb3.innerHTML = `<label class='form-label'>Saved Email Addresses</label><div class='list-group'></div>`;
+        mb3.className = 'mb-3 saved-emails-section';
+        mb3.innerHTML = `<label class='form-label mb-2'>Saved Email Addresses</label><br>`;
         // Insert before the new email input
         const newEmailInput = document.getElementById('new_email').closest('.mb-3');
         newEmailInput.parentNode.insertBefore(mb3, newEmailInput);
-        listGroup = mb3.querySelector('.list-group');
+        container = mb3;
       }
       // Check if already present
-      if ([...listGroup.querySelectorAll('span')].some(span => span.textContent === email)) return;
-      const div = document.createElement('div');
-      div.className = 'list-group-item d-flex justify-content-between align-items-center py-2';
-      div.innerHTML = `
-        <span>${email}</span>
-        <div>
-          <button type="button" class="btn btn-sm btn-link me-1" onclick="addSavedEmail('${email}')">
-            +
-          </button>
-          <button type="button" class="btn btn-sm btn-link text-danger" onclick="deleteSavedEmail('${email}')">
-            X
-          </button>
-        </div>
+      if ([...container.querySelectorAll('.saved-email-pill')].some(pill => pill.textContent.trim() === email)) return;
+      const pill = document.createElement('span');
+      pill.className = 'saved-email-pill';
+      pill.innerHTML = `
+        ${email}
+        <button type="button" class="saved-email-btn add" title="Add to list" onclick="addSavedEmail('${email}')">+</button>
+        <button type="button" class="saved-email-btn remove" title="Remove" onclick="deleteSavedEmail('${email}')">×</button>
       `;
-      listGroup.prepend(div);
+      container.appendChild(pill);
     }
 
     function deleteSavedEmail(email) {
