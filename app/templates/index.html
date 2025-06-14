@@ -39,6 +39,10 @@
     .header .d-flex.align-items-center {
       gap: 0.5rem;
     }
+    .btn-link {
+        text-decoration: none;
+        font-size: 1.2rem;
+    }
   </style>
 </head>
 
@@ -450,8 +454,13 @@
         {% if session.get('user_id') %}
           <!-- Property-wise Collection -->
           <div class="card border-0 shadow-sm">
-            <div class="card-body p-4">
-              <h5 class="card-title mb-4">Property-wise Collection</h5>
+            <div class="card-header d-flex justify-content-between align-items-center">
+              <h5 class="mb-0">Property-wise Collection</h5>
+              <button type="button" class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#emailReportModal">
+                <i class="fas fa-envelope me-2"></i>Send Report
+              </button>
+            </div>
+            <div class="card-body">
               <div class="table-responsive">
                 <table class="table table-hover">
                   <thead>
@@ -512,6 +521,67 @@
                   <h5 class="card-title mb-4">Monthly Collection Trends</h5>
                   <canvas id="monthlyCollectionChart"></canvas>
                 </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Email Report Modal -->
+          <div class="modal fade" id="emailReportModal" tabindex="-1" aria-labelledby="emailReportModalLabel" aria-hidden="true">
+            <div class="modal-dialog">
+              <div class="modal-content">
+                <div class="modal-header">
+                  <h5 class="modal-title" id="emailReportModalLabel">Send Collection Report</h5>
+                  <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <form action="{{ url_for('send_collection_report') }}" method="POST">
+                  <div class="modal-body">
+                    <div class="mb-3">
+                      <label for="email_list" class="form-label">Enter email addresses (one per line)</label>
+                      <textarea class="form-control" id="email_list" name="email_list" rows="5" required></textarea>
+                      <!-- <div class="form-text">
+                        <i class="fas fa-info-circle me-1"></i>
+                        Suggested: {{ user_email }}
+                        <button type="button" class="btn btn-link btn-sm p-0 ms-2" onclick="addSuggestedEmail()">
+                          Add
+                        </button>
+                      </div> -->
+                    </div>
+                    
+                    {% if saved_emails %}
+                    <div class="mb-3">
+                      <label class="form-label">Saved Email Addresses</label>
+                      <div class="list-group">
+                        {% for email in saved_emails %}
+                        <div class="list-group-item d-flex justify-content-between align-items-center py-2">
+                          <span>{{ email }}</span>
+                          <div>
+                            <button type="button" class="btn btn-sm btn-link me-1" onclick="addSavedEmail('{{ email }}')">
+                              +
+                            </button>
+                            <button type="button" class="btn btn-sm btn-link text-danger" onclick="deleteSavedEmail('{{ email }}')">
+                              X
+                            </button>
+                          </div>
+                        </div>
+                        {% endfor %}
+                      </div>
+                    </div>
+                    {% endif %}
+                    
+                    <div class="mb-3">
+                      <div class="input-group">
+                        <input type="email" class="form-control" id="new_email" placeholder="Add new email to saved list">
+                        <button class="btn btn-outline-secondary" type="button" onclick="saveNewEmail()">
+                          <i class="fas fa-save"></i> Save
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                  <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+                    <button type="submit" class="btn btn-primary">Send Report</button>
+                  </div>
+                </form>
               </div>
             </div>
           </div>
@@ -694,6 +764,136 @@
     function sendReminder(tenantId) {
       // TODO: Implement send reminder functionality
       alert('Send reminder functionality will be implemented');
+    }
+  </script>
+
+  <script>
+    function addSuggestedEmail() {
+      const textarea = document.getElementById('email_list');
+      const suggestedEmail = '{{ user_email }}';
+      
+      if (textarea.value.trim() === '') {
+        textarea.value = suggestedEmail;
+      } else {
+        // Check if email already exists
+        const emails = textarea.value.split('\n').map(e => e.trim());
+        if (!emails.includes(suggestedEmail)) {
+          textarea.value = textarea.value.trim() + '\n' + suggestedEmail;
+        }
+      }
+    }
+
+    function addSavedEmail(email) {
+      const textarea = document.getElementById('email_list');
+      if (textarea.value.trim() === '') {
+        textarea.value = email;
+      } else {
+        const emails = textarea.value.split('\n').map(e => e.trim());
+        if (!emails.includes(email)) {
+          textarea.value = textarea.value.trim() + '\n' + email;
+        }
+      }
+    }
+
+    function saveNewEmail() {
+      const emailInput = document.getElementById('new_email');
+      const email = emailInput.value.trim();
+      if (!email) {
+        alert('Please enter an email address');
+        return;
+      }
+      fetch('{{ url_for("save_email") }}', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded',
+        },
+        body: `email=${encodeURIComponent(email)}`
+      })
+      .then(response => response.json())
+      .then(data => {
+        if (data.success) {
+          // Clear the input
+          emailInput.value = '';
+          // Show a success message
+          // showEmailSaveMessage('Email saved!', 'success');
+          // Add the new email to the saved emails list dynamically
+          addEmailToSavedList(email);
+        } else {
+          showEmailSaveMessage(data.error || 'Failed to save email', 'danger');
+        }
+      })
+      .catch(error => {
+        showEmailSaveMessage('Error saving email', 'danger');
+      });
+    }
+
+    function showEmailSaveMessage(msg, type) {
+      let msgDiv = document.getElementById('emailSaveMsg');
+      if (!msgDiv) {
+        msgDiv = document.createElement('div');
+        msgDiv.id = 'emailSaveMsg';
+        msgDiv.className = 'alert mt-2';
+        const parent = document.getElementById('new_email').closest('.mb-3');
+        parent.appendChild(msgDiv);
+      }
+      msgDiv.className = 'alert mt-2 alert-' + (type === 'success' ? 'success' : 'danger');
+      msgDiv.textContent = msg;
+      setTimeout(() => { msgDiv.textContent = ''; }, 2000);
+    }
+
+    function addEmailToSavedList(email) {
+      let listGroup = document.querySelector('.list-group');
+      if (!listGroup) {
+        // If the list doesn't exist, create it
+        const mb3 = document.createElement('div');
+        mb3.className = 'mb-3';
+        mb3.innerHTML = `<label class='form-label'>Saved Email Addresses</label><div class='list-group'></div>`;
+        // Insert before the new email input
+        const newEmailInput = document.getElementById('new_email').closest('.mb-3');
+        newEmailInput.parentNode.insertBefore(mb3, newEmailInput);
+        listGroup = mb3.querySelector('.list-group');
+      }
+      // Check if already present
+      if ([...listGroup.querySelectorAll('span')].some(span => span.textContent === email)) return;
+      const div = document.createElement('div');
+      div.className = 'list-group-item d-flex justify-content-between align-items-center py-2';
+      div.innerHTML = `
+        <span>${email}</span>
+        <div>
+          <button type="button" class="btn btn-sm btn-link me-1" onclick="addSavedEmail('${email}')">
+            +
+          </button>
+          <button type="button" class="btn btn-sm btn-link text-danger" onclick="deleteSavedEmail('${email}')">
+            X
+          </button>
+        </div>
+      `;
+      listGroup.prepend(div);
+    }
+
+    function deleteSavedEmail(email) {
+      if (!confirm('Are you sure you want to delete this saved email?')) {
+        return;
+      }
+      
+      fetch('{{ url_for("delete_saved_email") }}', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded',
+        },
+        body: `email=${encodeURIComponent(email)}`
+      })
+      .then(response => response.json())
+      .then(data => {
+        if (data.success) {
+          location.reload(); // Refresh to update saved emails list
+        } else {
+          alert(data.error || 'Failed to delete email');
+        }
+      })
+      .catch(error => {
+        alert('Error deleting email');
+      });
     }
   </script>
 

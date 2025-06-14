@@ -10,6 +10,11 @@ import pandas as pd
 import io
 from app.drive_utils import upload_file, get_file_url, find_or_create_folder
 from app.whatsapp_utils import send_whatsapp_message
+import csv
+from io import StringIO
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 
 # Create uploads directory if it doesn't exist
 UPLOADS_DIR = os.path.join('app', 'static', 'uploads')
@@ -22,6 +27,23 @@ def get_db():
 
 # Database initialization
 def init_db():
+    db = get_db()
+    with app.open_resource('schema.sql') as f:
+        db.executescript(f.read().decode('utf8'))
+    
+    # Create saved_emails table if it doesn't exist
+    db.execute('''
+        CREATE TABLE IF NOT EXISTS saved_emails (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            email_address TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (user_id) REFERENCES users (id),
+            UNIQUE(user_id, email_address)
+        )
+    ''')
+    db.commit()
+    
     conn = get_db()
     c = conn.cursor()
     
@@ -315,40 +337,63 @@ def get_monthly_collection_data(user_id):
 # Initialize database when app starts
 init_db()
 
+def get_saved_emails(user_id):
+    """Get saved email addresses for a user"""
+    db = get_db()
+    cursor = db.cursor()
+    cursor.execute('''
+        SELECT email_address 
+        FROM saved_emails 
+        WHERE user_id = ?
+        ORDER BY created_at DESC
+    ''', (user_id,))
+    return [row[0] for row in cursor.fetchall()]
+
 @app.route('/')
 @app.route('/index')
 def index():
-    if 'user_id' in session:
-        conn = get_db()
-        c = conn.cursor()
-        properties = c.execute('SELECT * FROM properties WHERE user_id = ?', (session['user_id'],)).fetchall()
-        
-        tenants, stats, building_stats = get_tenants_with_bills(session['user_id'])
-        monthly_labels, monthly_collections, monthly_expected = get_monthly_collection_data(session['user_id'])
-        
-        # Convert building_stats to property_collections format
-        property_collections = []
-        total_expected = 0
-        total_collected = 0
-        total_pending = 0
-        
-        for property_name, stats in building_stats.items():
-            collection_rate = (stats['paid'] / stats['total'] * 100) if stats['total'] > 0 else 0
-            property_collections.append({
-                'name': property_name,
-                'collected': stats['paid'],
-                'pending': stats['pending'],
-                'expected': stats['total'],
-                'collection_rate': f'{collection_rate:.2f}'
-            })
-            total_expected += stats['total']
-            total_collected += stats['paid']
-            total_pending += stats['pending']
-        
-        # Calculate overall collection rate
-        overall_collection_rate = (total_collected / total_expected * 100) if total_expected > 0 else 0
-        
-        return render_template('index.html', 
+    if 'user_id' not in session:
+        return redirect(url_for('login'))
+    
+    # Get saved emails for the user
+    saved_emails = get_saved_emails(session['user_id'])
+    
+    # Get user email
+    conn = get_db()
+    c = conn.cursor()
+    user = c.execute('SELECT email FROM users WHERE id = ?', (session['user_id'],)).fetchone()
+    user_email = user['email'] if user else ''
+    
+    conn = get_db()
+    c = conn.cursor()
+    properties = c.execute('SELECT * FROM properties WHERE user_id = ?', (session['user_id'],)).fetchall()
+    
+    tenants, stats, building_stats = get_tenants_with_bills(session['user_id'])
+    monthly_labels, monthly_collections, monthly_expected = get_monthly_collection_data(session['user_id'])
+    
+    # Convert building_stats to property_collections format
+    property_collections = []
+    total_expected = 0
+    total_collected = 0
+    total_pending = 0
+    
+    for property_name, stats in building_stats.items():
+        collection_rate = (stats['paid'] / stats['total'] * 100) if stats['total'] > 0 else 0
+        property_collections.append({
+            'name': property_name,
+            'collected': stats['paid'],
+            'pending': stats['pending'],
+            'expected': stats['total'],
+            'collection_rate': f'{collection_rate:.2f}'
+        })
+        total_expected += stats['total']
+        total_collected += stats['paid']
+        total_pending += stats['pending']
+    
+    # Calculate overall collection rate
+    overall_collection_rate = (total_collected / total_expected * 100) if total_expected > 0 else 0
+    
+    return render_template('index.html', 
                           properties=properties, 
                           tenants=tenants,
                           total_pending=total_pending,
@@ -358,16 +403,9 @@ def index():
                           monthly_labels=monthly_labels,
                           monthly_collections=monthly_collections,
                           monthly_expected=monthly_expected,
-                          property_collections=property_collections)
-    return render_template('index.html', 
-                         tenants=[], 
-                         total_pending=0,
-                         total_collection=0,
-                         collection_rate=0,
-                         monthly_labels=[],
-                         monthly_collections=[],
-                         monthly_expected=[],
-                         property_collections={})
+                          property_collections=property_collections,
+                          saved_emails=saved_emails,
+                          user_email=user_email)  # Add saved_emails to template context
 
 @app.route('/login', methods=['GET', 'POST'])
 def login():
@@ -2836,3 +2874,267 @@ def get_previous_reading():
             'previous_reading': 0,
             'price_per_unit': 8
         })
+
+@app.route('/send-collection-report', methods=['POST'])
+def send_collection_report():
+    if 'user_id' not in session:
+        return redirect(url_for('login'))
+    
+    # Get email list from form
+    email_list = request.form.get('email_list', '').strip()
+    if not email_list:
+        flash('Please enter at least one email address', 'danger')
+        return redirect(url_for('index'))
+    
+    # Split email list and clean up
+    recipients = [email.strip() for email in email_list.split('\n') if email.strip()]
+    if not recipients:
+        flash('Please enter at least one valid email address', 'danger')
+        return redirect(url_for('index'))
+    
+    # Get collection data
+    tenants, stats, building_stats = get_tenants_with_bills(session['user_id'])
+    
+    # Calculate totals
+    total_expected = 0
+    total_collected = 0
+    total_pending = 0
+    
+    for property_name, stats in building_stats.items():
+        total_expected += stats['total']
+        total_collected += stats['paid']
+        total_pending += stats['pending']
+    
+    overall_collection_rate = (total_collected / total_expected * 100) if total_expected > 0 else 0
+    
+    # Create HTML table for the report
+    html_content = f"""
+    <html>
+    <head>
+        <style>
+            body {{
+                font-family: Arial, sans-serif;
+                line-height: 1.6;
+                color: #333;
+                max-width: 800px;
+                margin: 0 auto;
+                padding: 20px;
+            }}
+            .header {{
+                background-color: #4a90e2;
+                color: white;
+                padding: 20px;
+                border-radius: 5px 5px 0 0;
+                margin-bottom: 20px;
+            }}
+            .header h2 {{
+                margin: 0;
+                font-size: 24px;
+            }}
+            .summary {{
+                background-color: #f8f9fa;
+                padding: 15px;
+                border-radius: 5px;
+                margin-bottom: 20px;
+            }}
+            .summary-item {{
+                display: inline-block;
+                margin-right: 30px;
+            }}
+            .summary-label {{
+                font-size: 12px;
+                color: #666;
+                text-transform: uppercase;
+            }}
+            .summary-value {{
+                font-size: 18px;
+                font-weight: bold;
+                color: #333;
+            }}
+            .distribution {{
+                margin: 20px 0;
+                padding: 20px;
+                background-color: #fff;
+                border-radius: 5px;
+                box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+            }}
+            .distribution h3 {{
+                margin-top: 0;
+                color: #333;
+                font-size: 18px;
+                margin-bottom: 15px;
+            }}
+            table {{
+                width: 100%;
+                border-collapse: collapse;
+                margin-top: 10px;
+            }}
+            th {{
+                background-color: #f8f9fa;
+                padding: 12px;
+                text-align: left;
+                font-weight: 600;
+                color: #333;
+                border-bottom: 2px solid #dee2e6;
+            }}
+            td {{
+                padding: 12px;
+                border-bottom: 1px solid #dee2e6;
+            }}
+            .text-success {{
+                color: #28a745;
+                font-weight: 600;
+            }}
+            .text-danger {{
+                color: #dc3545;
+                font-weight: 600;
+            }}
+            .total-row {{
+                background-color: #f8f9fa;
+                font-weight: bold;
+            }}
+            .total-row td {{
+                border-top: 2px solid #dee2e6;
+            }}
+            .footer {{
+                margin-top: 30px;
+                text-align: center;
+                color: #666;
+                font-size: 12px;
+            }}
+        </style>
+    </head>
+    <body>
+        <div class="header">
+            <h2>Property-wise Collection Report</h2>
+        </div>
+        
+        <div class="summary">
+            <div class="summary-item">
+                <div class="summary-label">Total Expected</div>
+                <div class="summary-value">₹{total_expected:.2f}</div>
+            </div>
+            <div class="summary-item">
+                <div class="summary-label">Total Collected</div>
+                <div class="summary-value text-success">₹{total_collected:.2f}</div>
+            </div>
+            <div class="summary-item">
+                <div class="summary-label">Total Pending</div>
+                <div class="summary-value text-danger">₹{total_pending:.2f}</div>
+            </div>
+            <div class="summary-item">
+                <div class="summary-label">Collection Rate</div>
+                <div class="summary-value">{overall_collection_rate:.2f}%</div>
+            </div>
+        </div>
+
+        <div class="distribution">
+            <h3>Property-wise Distribution</h3>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Property</th>
+                        <th>Expected</th>
+                        <th>Collected</th>
+                        <th>Pending</th>
+                        <th>Collection Rate</th>
+                    </tr>
+                </thead>
+                <tbody>
+    """
+    
+    # Add property rows
+    for property_name, stats in building_stats.items():
+        collection_rate = (stats['paid'] / stats['total'] * 100) if stats['total'] > 0 else 0
+        html_content += f"""
+                    <tr>
+                        <td>{property_name}</td>
+                        <td>₹{stats['total']:.2f}</td>
+                        <td class="text-success">₹{stats['paid']:.2f}</td>
+                        <td class="text-danger">₹{stats['pending']:.2f}</td>
+                        <td>{collection_rate:.2f}%</td>
+                    </tr>
+        """
+    
+    html_content += f"""
+                    <tr class="total-row">
+                        <td>Total</td>
+                        <td>₹{total_expected:.2f}</td>
+                        <td class="text-success">₹{total_collected:.2f}</td>
+                        <td class="text-danger">₹{total_pending:.2f}</td>
+                        <td>{overall_collection_rate:.2f}%</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+        
+        <div class="footer">
+            <p>Generated on {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</p>
+            <p>This is an automated report from Rentease</p>
+        </div>
+    </body>
+    </html>
+    """
+    
+    try:
+        msg = Message(
+            f'Property-wise Collection Report - {datetime.now().strftime("%Y-%m-%d")}',
+            recipients=recipients
+        )
+        msg.html = html_content
+        mail.send(msg)
+        flash('Collection report sent successfully!', 'success')
+    except Exception as e:
+        flash('Failed to send collection report', 'danger')
+    
+    return redirect(url_for('index'))
+
+@app.route('/save-email', methods=['POST'])
+def save_email():
+    """Save a new email address for the user"""
+    if 'user_id' not in session:
+        return jsonify({'error': 'Not authenticated'}), 401
+    
+    email = request.form.get('email', '').strip()
+    if not email:
+        return jsonify({'error': 'Email is required'}), 400
+    
+    db = get_db()
+    cursor = db.cursor()
+    try:
+        cursor.execute('''
+            INSERT INTO saved_emails (user_id, email_address, created_at)
+            VALUES (?, ?, datetime('now'))
+        ''', (session['user_id'], email))
+        db.commit()
+        return jsonify({'success': True})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/delete-saved-email', methods=['POST'])
+def delete_saved_email():
+    """Delete a saved email address"""
+    if 'user_id' not in session:
+        return jsonify({'error': 'Not authenticated'}), 401
+    
+    email = request.form.get('email', '').strip()
+    if not email:
+        return jsonify({'error': 'Email is required'}), 400
+    
+    db = get_db()
+    cursor = db.cursor()
+    try:
+        cursor.execute('''
+            DELETE FROM saved_emails 
+            WHERE user_id = ? AND email_address = ?
+        ''', (session['user_id'], email))
+        db.commit()
+        return jsonify({'success': True})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.cli.command('init-db')
+def init_db_command():
+    """Clear the existing data and create new tables."""
+    init_db()
+    print('Initialized the database.')
