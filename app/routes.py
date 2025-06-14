@@ -206,7 +206,7 @@ def get_tenants_with_bills(user_id):
                     FROM bill_payments 
                     WHERE tenant_id = t.id 
                     AND strftime('%Y-%m', payment_date) = strftime('%Y-%m', date('now', 'localtime', 'start of month', '-1 month'))
-                    ORDER BY payment_date DESC, id DESC LIMIT 1
+                    ORDER BY id DESC, id DESC LIMIT 1
                 ), 0)
                 ELSE 0 
             END - COALESCE(SUM(CASE 
@@ -246,7 +246,7 @@ def get_tenants_with_bills(user_id):
                 'tenant_count': 0
             }
         
-        building_stats[property_name]['total'] += tenant['total_amount'] + tenant['prev_month_pending']
+        building_stats[property_name]['total'] += (tenant['paid_amount'] + tenant['total_pending'])
         building_stats[property_name]['paid'] += tenant['paid_amount']
         building_stats[property_name]['pending'] += tenant['total_pending']
         building_stats[property_name]['tenant_count'] += 1
@@ -1601,7 +1601,7 @@ def monthly_bills(year, month):
                 WHERE tenant_id = t.id 
                 AND strftime('%Y', payment_date) = ? 
                 AND strftime('%m', payment_date) = ?
-                ORDER BY payment_date DESC LIMIT 1
+                ORDER BY id DESC LIMIT 1
             ), 0) as pending_amount,
             lp.payment_id as latest_payment_id
         FROM tenants t
@@ -1695,7 +1695,7 @@ def all_bills():
                     WHERE tenant_id = t.id 
                     AND strftime('%Y', payment_date) = ? 
                     AND strftime('%m', payment_date) = ?
-                    ORDER BY payment_date DESC, id DESC LIMIT 1
+                    ORDER BY id DESC, id DESC LIMIT 1
                 ), 0) as last_pending_amount
             FROM tenants t
             JOIN rooms r ON t.room_id = r.id
@@ -2115,6 +2115,7 @@ def api_monthly_bills(month):
             AND strftime('%m', bp.payment_date) = ?
         LEFT JOIN latest_payments lp ON t.id = lp.tenant_id AND lp.rn = 1
         WHERE p.user_id = ?
+        AND (strftime('%Y-%m', t.move_out_date) >= ? OR t.move_out_date IS NULL)
         AND strftime('%Y-%m', t.move_in_date) <= ?
     '''
     
@@ -2122,7 +2123,7 @@ def api_monthly_bills(month):
               year, month,  # for total_amount subquery
               year, month,  # for pending_amount subquery
               year, month,  # for bill_payments join
-              session['user_id'], f"{year}-{month}"]  # for WHERE clause
+              session['user_id'], f"{year}-{month}", f"{year}-{month}"]  # for WHERE clause
     
     # Add property filter if specified
     if property_id:

@@ -457,7 +457,7 @@
                   <thead>
                     <tr>
                       <th>Property</th>
-                      <!-- <th>Expected</th> -->
+                      <th>Expected</th>
                       <th>Collected</th>
                       <th>Pending</th>
               
@@ -468,7 +468,7 @@
                     {% for property in property_collections %}
                     <tr>
                       <td>{{ property.name }}</td>
-                      <!-- <td>₹{{ "%.2f"|format(property.expected) }}</td> -->
+                      <td>₹{{ "%.2f"|format(property.expected) }}</td>
                       <td class="text-success">₹{{ "%.2f"|format(property.collected) }}</td>
                       <td class="text-danger">₹{{ "%.2f"|format(property.pending) }}</td>
                       <td>
